@@ -134,7 +134,24 @@ real bug during development: a pillar standing in the boss arena's doorway.)
   `Zelda64RecompSyms` (an undefined symbol is a hard error; I confirmed the tool rejects one) and every hook target exists in the ROM.
 * `tools/tests/test_song.c` (song tracker) and `tools/gen_world.py --check` (layout) pass.
 * Software renders of the levels and models (`docs/previews/`) look as intended.
-* `tools/build_linux.sh` produces the `.nrm` from a fresh virtualenv.
+* `tools/build_linux.sh` produces the `.nrm` from nothing: a fresh clone of this branch, an empty toolchain directory, and the
+  GitHub / PyPI fetches (under a minute, no warnings). GitHub Actions does the same on a clean runner. A second, independent
+  rebuild reproduced `mod_binary.bin`, `mod_syms.bin`, `mod.json` and `thumb.png` byte for byte (only the zip timestamps differ).
+
+**Verified against the runtime's source (read, not run).** Everything the game has to resolve when it loads the mod was
+checked against Zelda 64: Recompiled (`v1.2.2`, the latest release, and `dev`) and N64ModernRuntime instead of being assumed:
+
+* The two event callbacks, `recomp_on_autosave` and `recomp_after_autosave`, are declared by the game's `patches/autosaving.c`
+  with the same `(PlayState*)` signature, in `v1.2.2` as well as `dev`.
+* The one import, `recomp_printf`, is exported by the game's `patches/print.c`.
+* All five hook targets (`Message_Update`, `EnTest7_WarpCsWarp`, `Play_Init`, `Play_InitScene`, `Room_RequestNewRoom`) are
+  ordinary recompiled functions with a non-zero size. None is stubbed, ignored or natively reimplemented (the loader rejects
+  those as `CannotBeHooked`). The game itself replaces `Play_Init`, and the loader has a dedicated path that applies mod hooks to
+  base-patched functions.
+* `EnTest7_WarpCsWarp` is also what the game's "skip the Song of Soaring cutscene" patch (`patches/skip_sos.c`) calls when A or B
+  is pressed, so the destination override covers a skipped warp too.
+* The manifest `id` passes N64Recomp's own `validate_mod_id` (I ran the real function; it rejects malformed ids), and
+  `minimum_recomp_version` (1.2.2) is the latest release.
 
 **Not verified: anything that needs the game running.** The mod was written against the decomp source, not observed. The
 engine behaviours it relies on were checked by reading the decomp (the most important ones are listed above), but real
