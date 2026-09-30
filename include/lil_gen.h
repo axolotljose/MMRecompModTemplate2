@@ -5,8 +5,8 @@
 #include "global.h"
 
 extern u64 gLilTex_grass[128];
-extern u64 gLilTex_flag[128];
 extern u64 gLilTex_marble[128];
+extern u64 gLilTex_flag[128];
 extern u64 gLilTex_water[128];
 extern u64 gLilTex_hedge[128];
 extern u64 gLilTex_cobble[128];

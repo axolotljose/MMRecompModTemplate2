@@ -32,8 +32,22 @@ static s32 Lil_IsFreeOverlayEntry(ActorOverlay* e) {
            (e->file.vromStart == 0) && (e->file.vromEnd == 0);
 }
 
+// Some unused table entry, used as the destination of placeholders that could not be registered: spawning an unused entry
+// is a harmless no-op in the vanilla spawn code (its profile is NULL). Returns 0 if there is none.
+static s16 Lil_FindEmptyActorId(void) {
+    s32 id;
+
+    for (id = 1; id < ACTOR_ID_MAX; id++) {
+        if (Lil_IsFreeOverlayEntry(&gActorOverlayTable[id])) {
+            return id;
+        }
+    }
+    return 0;
+}
+
 // Replaces the placeholder ids used by the generated actor lists with the real (registered) ids.
 static void Lil_RemapActorLists(void) {
+    s16 emptyId = Lil_FindEmptyActorId();
     s32 i;
     s32 j;
 
@@ -46,6 +60,9 @@ static void Lil_RemapActorLists(void) {
             if ((id >= LIL_ACTOR_PLACEHOLDER_BASE) && (id < (LIL_ACTOR_PLACEHOLDER_BASE + LIL_ACT_COUNT))) {
                 s16 real = gLilActorIds[id - LIL_ACTOR_PLACEHOLDER_BASE];
 
+                if (real == 0) {
+                    real = emptyId; // not registered: make the entry spawn nothing rather than something wrong
+                }
                 if (real != 0) {
                     entries[j].id = (entries[j].id & ~0x1FFF) | real;
                 }
@@ -174,7 +191,23 @@ void Lil_Puff(PlayState* play, Vec3f* pos, f32 scale) {
 /* ------------------------------------------------------------------------------------------------------------------
  * Enemies
  * ---------------------------------------------------------------------------------------------------------------- */
+Actor* Lil_SpawnActor(PlayState* play, Actor* parent, LilActorSlot slot, f32 x, f32 y, f32 z, s16 rotX, s16 rotY, s16 rotZ,
+                      s32 params) {
+    s16 id = gLilActorIds[slot];
+
+    if (id == 0) {
+        return NULL; // 0 would be ACTOR_PLAYER
+    }
+    if (parent != NULL) {
+        return Actor_SpawnAsChild(&play->actorCtx, parent, play, id, x, y, z, rotX, rotY, rotZ, params);
+    }
+    return Actor_Spawn(&play->actorCtx, play, id, x, y, z, rotX, rotY, rotZ, params);
+}
+
 s32 Lil_IsLilEnemyId(s16 actorId) {
+    if (actorId == 0) {
+        return false;
+    }
     return (actorId == gLilActorIds[LIL_ACT_THORNLING]) || (actorId == gLilActorIds[LIL_ACT_PETAL_WISP]) ||
            (actorId == gLilActorIds[LIL_ACT_ROSE_KNIGHT]);
 }

@@ -15,29 +15,35 @@
 #define ENEMY_FLAGS (ACTOR_FLAG_ATTENTION_ENABLED | ACTOR_FLAG_HOSTILE)
 #define SLEEP_DAMAGE_MULTIPLIER 2
 
-/* Damage tables (per damage type, see the vanilla enemies). All effects are "none". */
-#define DT(dmg) DMG_ENTRY(dmg, 0)
+/* Damage tables: one multiplier per damage type, in the vanilla order (see the vanilla enemies). No special effects. */
+#define DT(mult) DMG_ENTRY(mult, 0)
+#define X0 LIL_DMG_NONE
+#define X1 LIL_DMG_X1
+#define X2 LIL_DMG_X2
+#define X3 LIL_DMG_X3
+#define X4 LIL_DMG_X4
+
 static DamageTable sStdDamageTable = {
-    /* Deku Nut       */ DT(0), /* Deku Stick     */ DT(1), /* Horse trample  */ DT(1), /* Explosives     */ DT(2),
-    /* Zora boomerang */ DT(1), /* Normal arrow   */ DT(1), /* UNK_DMG_0x06   */ DT(0), /* Hookshot       */ DT(1),
-    /* Goron punch    */ DT(2), /* Sword          */ DT(1), /* Goron pound    */ DT(2), /* Fire arrow     */ DT(2),
-    /* Ice arrow      */ DT(2), /* Light arrow    */ DT(2), /* Goron spikes   */ DT(1), /* Deku spin      */ DT(1),
-    /* Deku bubble    */ DT(1), /* Deku launch    */ DT(2), /* UNK_DMG_0x12   */ DT(0), /* Zora barrier   */ DT(0),
-    /* Normal shield  */ DT(0), /* Light ray      */ DT(0), /* Thrown object  */ DT(1), /* Zora punch     */ DT(1),
-    /* Spin attack    */ DT(2), /* Sword beam     */ DT(1), /* Normal Roll    */ DT(0), /* UNK_DMG_0x1B   */ DT(0),
-    /* UNK_DMG_0x1C   */ DT(0), /* Unblockable    */ DT(0), /* UNK_DMG_0x1E   */ DT(0), /* Powder Keg     */ DT(3),
+    /* Deku Nut       */ DT(X0), /* Deku Stick     */ DT(X1), /* Horse trample  */ DT(X1), /* Explosives     */ DT(X2),
+    /* Zora boomerang */ DT(X1), /* Normal arrow   */ DT(X1), /* UNK_DMG_0x06   */ DT(X0), /* Hookshot       */ DT(X1),
+    /* Goron punch    */ DT(X2), /* Sword          */ DT(X1), /* Goron pound    */ DT(X2), /* Fire arrow     */ DT(X2),
+    /* Ice arrow      */ DT(X2), /* Light arrow    */ DT(X2), /* Goron spikes   */ DT(X1), /* Deku spin      */ DT(X1),
+    /* Deku bubble    */ DT(X1), /* Deku launch    */ DT(X2), /* UNK_DMG_0x12   */ DT(X0), /* Zora barrier   */ DT(X0),
+    /* Normal shield  */ DT(X0), /* Light ray      */ DT(X0), /* Thrown object  */ DT(X1), /* Zora punch     */ DT(X1),
+    /* Spin attack    */ DT(X2), /* Sword beam     */ DT(X1), /* Normal Roll    */ DT(X0), /* UNK_DMG_0x1B   */ DT(X0),
+    /* UNK_DMG_0x1C   */ DT(X0), /* Unblockable    */ DT(X0), /* UNK_DMG_0x1E   */ DT(X0), /* Powder Keg     */ DT(X4),
 };
 
-// The Rose Knight's shield soaks up ordinary hits (1 damage), so everything that gets through is worth more.
+// Rose Knight: the damage types its shield does not stop (see EnLilKnight_ShieldBlocks) are the ones that hit hardest.
 static DamageTable sKnightDamageTable = {
-    /* Deku Nut       */ DT(0), /* Deku Stick     */ DT(1), /* Horse trample  */ DT(1), /* Explosives     */ DT(3),
-    /* Zora boomerang */ DT(1), /* Normal arrow   */ DT(1), /* UNK_DMG_0x06   */ DT(0), /* Hookshot       */ DT(0),
-    /* Goron punch    */ DT(3), /* Sword          */ DT(1), /* Goron pound    */ DT(3), /* Fire arrow     */ DT(2),
-    /* Ice arrow      */ DT(2), /* Light arrow    */ DT(2), /* Goron spikes   */ DT(2), /* Deku spin      */ DT(1),
-    /* Deku bubble    */ DT(1), /* Deku launch    */ DT(2), /* UNK_DMG_0x12   */ DT(0), /* Zora barrier   */ DT(0),
-    /* Normal shield  */ DT(0), /* Light ray      */ DT(0), /* Thrown object  */ DT(1), /* Zora punch     */ DT(1),
-    /* Spin attack    */ DT(2), /* Sword beam     */ DT(1), /* Normal Roll    */ DT(0), /* UNK_DMG_0x1B   */ DT(0),
-    /* UNK_DMG_0x1C   */ DT(0), /* Unblockable    */ DT(0), /* UNK_DMG_0x1E   */ DT(0), /* Powder Keg     */ DT(3),
+    /* Deku Nut       */ DT(X0), /* Deku Stick     */ DT(X1), /* Horse trample  */ DT(X1), /* Explosives     */ DT(X3),
+    /* Zora boomerang */ DT(X1), /* Normal arrow   */ DT(X1), /* UNK_DMG_0x06   */ DT(X0), /* Hookshot       */ DT(X0),
+    /* Goron punch    */ DT(X3), /* Sword          */ DT(X1), /* Goron pound    */ DT(X3), /* Fire arrow     */ DT(X2),
+    /* Ice arrow      */ DT(X2), /* Light arrow    */ DT(X2), /* Goron spikes   */ DT(X2), /* Deku spin      */ DT(X1),
+    /* Deku bubble    */ DT(X1), /* Deku launch    */ DT(X2), /* UNK_DMG_0x12   */ DT(X0), /* Zora barrier   */ DT(X0),
+    /* Normal shield  */ DT(X0), /* Light ray      */ DT(X0), /* Thrown object  */ DT(X1), /* Zora punch     */ DT(X1),
+    /* Spin attack    */ DT(X2), /* Sword beam     */ DT(X1), /* Normal Roll    */ DT(X0), /* UNK_DMG_0x1B   */ DT(X0),
+    /* UNK_DMG_0x1C   */ DT(X0), /* Unblockable    */ DT(X0), /* UNK_DMG_0x1E   */ DT(X0), /* Powder Keg     */ DT(X4),
 };
 
 static InitChainEntry sGroundInitChain[] = {
@@ -543,10 +549,24 @@ static CollisionCheckInfoInit sKnightColChkInfoInit = { 6, 26, 92, 120 };
 
 #define KNIGHT_BLOCK_ARC 0x3800 // ~79 degrees either side of the knight's facing
 
+// What the shield stops when it is in the way: everything ordinary. Bombs, Goron attacks, spin attacks, magic arrows, the
+// Deku launch and powder kegs are heavy enough to get through.
+#define KNIGHT_SHIELD_BLOCKS                                                                                      \
+    (DMG_SWORD | DMG_DEKU_STICK | DMG_NORMAL_ARROW | DMG_ZORA_BOOMERANG | DMG_HOOKSHOT | DMG_ZORA_PUNCH | \
+     DMG_SWORD_BEAM | DMG_THROWN_OBJECT | DMG_HORSE_TRAMPLE)
+
 static s32 EnLilKnight_FacingAttacker(EnLilKnight* this) {
     s16 diff = this->base.actor.yawTowardsPlayer - this->base.actor.shape.rot.y;
 
     return ABS_ALT(diff) < KNIGHT_BLOCK_ARC;
+}
+
+// Looks at the attack that just hit us and decides whether a shield would stop it.
+static s32 EnLilKnight_ShieldBlocks(EnLilKnight* this) {
+    ColliderElement* hit = this->collider.elem.acHitElem;
+    u32 type = (hit != NULL) ? hit->atDmgInfo.dmgFlags : 0;
+
+    return (type & KNIGHT_SHIELD_BLOCKS) != 0;
 }
 
 void EnLilKnight_Init(Actor* thisx, PlayState* play) {
@@ -584,7 +604,7 @@ void EnLilKnight_Update(Actor* thisx, PlayState* play) {
 
     if ((this->collider.base.acFlags & AC_HIT) && (this->state != KNIGHT_DYING)) {
         s32 vulnerable = asleep || (this->state == KNIGHT_WINDUP) || (this->state == KNIGHT_SWING) ||
-                         (this->state == KNIGHT_RECOVER) || (actor->colChkInfo.damage >= 2) || !EnLilKnight_FacingAttacker(this);
+                         (this->state == KNIGHT_RECOVER) || !EnLilKnight_FacingAttacker(this) || !EnLilKnight_ShieldBlocks(this);
 
         this->collider.base.acFlags &= ~AC_HIT;
         if (!vulnerable) {

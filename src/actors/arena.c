@@ -102,8 +102,7 @@ static void EnLilArena_SpawnWave(EnLilArena* this, PlayState* play, const LilAre
         spawnPos.z = z;
         yaw = Math_Vec3f_Yaw(&spawnPos, &this->actor.home.pos);
 
-        if (Actor_SpawnAsChild(&play->actorCtx, &this->actor, play, gLilActorIds[spawn->slot], x, y, z, 0, yaw, 0,
-                               LIL_ENEMY_PARAM_AWAKE) != NULL) {
+        if (Lil_SpawnActor(play, &this->actor, spawn->slot, x, y, z, 0, yaw, 0, LIL_ENEMY_PARAM_AWAKE) != NULL) {
             Vec3f pos;
 
             pos.x = x;
@@ -234,8 +233,7 @@ static ColliderCylinderInit sHazardCylinderInit = {
 };
 
 Actor* Lil_SpawnHazard(PlayState* play, s32 type, f32 x, f32 y, f32 z, s16 yaw, s32 speed) {
-    return Actor_Spawn(&play->actorCtx, play, gLilActorIds[LIL_ACT_HAZARD], x, y, z, 0, yaw, 0,
-                       (type & 0xF) | ((speed & 0xF) << 4));
+    return Lil_SpawnActor(play, NULL, LIL_ACT_HAZARD, x, y, z, 0, yaw, 0, (type & 0xF) | ((speed & 0xF) << 4));
 }
 
 void EnLilHazard_Init(Actor* thisx, PlayState* play) {
@@ -255,6 +253,7 @@ void EnLilHazard_Init(Actor* thisx, PlayState* play) {
         this->timer = HAZARD_PETAL_LIFETIME;
     } else {
         this->collider.dim.radius = 20;
+        this->collider.elem.atDmgInfo.damage = 0x10; // a thorn through the foot hurts more than a petal (1 heart vs 1/2)
         this->timer = 0;
         this->height = 0.0f;
         this->collider.base.atFlags &= ~AT_ON;

@@ -473,13 +473,27 @@ def build_sanctuary():
     # lighting for baked colours: a soft moonlit garden
     sc.glows += [((0, 120, -150), 420, (150, 160, 255)), ((0, 40, -1250), 300, (255, 120, 190))]
 
-    # ground (grass), plaza and path
-    sc.face([(-HALF, 0, -HALF), (HALF, 0, -HALF), (HALF, 0, HALF), (-HALF, 0, HALF)], 'grass', facing=(0, 1, 0), collide=grass, max_edge=300)
-    sc.face([(-360, 2, -360), (360, 2, -360), (360, 2, 360), (-360, 2, 360)], 'plaza', facing=(0, 1, 0), collide=stone, max_edge=240)
-    sc.face([(-90, 2, -HALF), (90, 2, -HALF), (90, 2, -360), (-90, 2, -360)], 'marble', facing=(0, 1, 0), collide=stone, max_edge=240)
-    sc.face([(-90, 2, 360), (90, 2, 360), (90, 2, HALF - 120), (-90, 2, HALF - 120)], 'marble', facing=(0, 1, 0), collide=stone, max_edge=240)
-    # moonlit pool decoration (visual only, sits just above the plaza)
-    sc.face([(180, 3, 80), (300, 3, 80), (300, 3, 240), (180, 3, 240)], 'water', facing=(0, 1, 0), max_edge=0)
+    # ground. The rendered mesh never overlaps itself (the grass is cut out wherever the plaza / paths / pool sit) so there
+    # is nothing to z-fight, while the collision keeps simple overlapping floors (the game picks the highest one).
+    def floor_rect(x0, z0, x1, z1, y, mat, collide=None):
+        sc.face([(x0, y, z0), (x1, y, z0), (x1, y, z1), (x0, y, z1)], mat, facing=(0, 1, 0), collide=collide, max_edge=300)
+    def floor_collision(x0, z0, x1, z1, y, surf):
+        sc.collide_only([(x0, y, z0), (x1, y, z0), (x1, y, z1), (x0, y, z1)], (0, 1, 0), surf)
+    floor_collision(-HALF, -HALF, HALF, HALF, 0, grass)
+    floor_collision(-360, -360, 360, 360, 2, stone)
+    floor_collision(-90, -HALF, 90, -360, 2, stone)
+    floor_collision(-90, 360, 90, HALF - 120, 2, stone)
+    # grass (rendered)
+    for (x0, z0, x1, z1) in ((-HALF, -HALF, -360, HALF), (360, -HALF, HALF, HALF), (-360, -HALF, -90, -360), (90, -HALF, 360, -360),
+                            (-360, 360, -90, HALF), (90, 360, 360, HALF), (-90, HALF - 120, 90, HALF)):
+        floor_rect(x0, z0, x1, z1, 0, 'grass')
+    # paths (rendered)
+    floor_rect(-90, -HALF, 90, -360, 2, 'marble')
+    floor_rect(-90, 360, 90, HALF - 120, 2, 'marble')
+    # plaza with a small reflecting pool set into it (rendered)
+    for (x0, z0, x1, z1) in ((-360, -360, 180, 360), (300, -360, 360, 360), (180, -360, 300, 80), (180, 240, 300, 360)):
+        floor_rect(x0, z0, x1, z1, 2, 'plaza')
+    floor_rect(180, 80, 300, 240, 2, 'water')
 
     # hedge walls; the north wall has the crypt gate opening
     ws = stone
@@ -521,7 +535,7 @@ def build_sanctuary():
         for x in (-840, 840):
             sc.cone(x, 0, z, 40, 360, 'leaf', sides=6)
 
-    sc.objects = ['GAMEPLAY_KEEP']
+    sc.objects = []            # everything in the Sanctuary comes from GAMEPLAY_KEEP, which is always loaded
     # actors
     sc.actor(A_STATUE, 0, 34, -150, 0, FLAG_SANCTUARY_GATE)
     sc.actor(A_BARRIER, 0, 0, -HALF + 6, 0, (BARRIER_SANCTUARY << 8) | FLAG_SANCTUARY_GATE)
@@ -601,13 +615,13 @@ def build_crypt():
             sc.pillar(x, z, 28, 0, H, 'marble' if z > -2000 else 'crypt_wall', collide=stone, cap_mat='rose_white')
             sc.glows.append(((x, 200, z), 260, (255, 150, 170)))
     # raised dais in the warden arena and the boss arena (visual + collision)
-    sc.box(-140, 0, -5540, 140, 18, -5260, 'warden_floor', collide=stone)
-    sc.box(-180, 0, -7080, 180, 22, -6720, 'boss_floor', collide=stone)
-    for (x, z) in ((-400, -5400), (400, -5400), (0, -5800)):
+    sc.box(-140, 0, -5540, 140, 16, -5260, 'warden_floor', collide=stone)
+    sc.box(-180, 0, -7080, 180, 16, -6720, 'boss_floor', collide=stone)
+    for (x, z) in ((-400, -5400), (400, -5400), (-300, -5800), (300, -5800)):
         sc.pillar(x, z, 30, 0, 420, 'warden_wall', collide=stone, cap_mat='rose_white')
         sc.glows.append(((x, 220, z), 280, (255, 190, 120)))
     for k in range(6):
-        ang = 2 * math.pi * k / 6 + math.pi / 6
+        ang = 2 * math.pi * k / 6            # 0, 60, 120 ... degrees: none of them stands in front of the south entrance (90)
         x, z = 520 * math.cos(ang), -6900 + 520 * math.sin(ang)
         sc.pillar(x, z, 34, 0, 620, 'boss_wall', collide=stone, cap_mat='glow')
         sc.glows.append(((x, 300, z), 320, (230, 100, 200)))
@@ -619,7 +633,7 @@ def build_crypt():
         z = -4100 - k * 110
         sc.cone(-100, 0, z, 16, 70, 'leaf', sides=5); sc.cone(100, 0, z - 40, 16, 70, 'leaf', sides=5)
 
-    sc.objects = ['GAMEPLAY_KEEP', 'OBJECT_BOMBF', 'OBJECT_GI_HEARTS']
+    sc.objects = ['OBJECT_BOMBF', 'OBJECT_GI_HEARTS']   # bomb flowers and the heart pieces / containers (GAMEPLAY_KEEP is always loaded)
     # ---- actors --------------------------------------------------------------------------------------------------
     # entry hall
     sc.actor(A_PORTAL, 0, 0, 350, 0, PORTAL_TO_SANCTUARY)
@@ -640,10 +654,10 @@ def build_crypt():
     sc.actor_vanilla = [(ACT_VANILLA_BOMBFLOWER, -70, 0, -4120, 0, 0), (ACT_VANILLA_BOMBFLOWER, 70, 0, -4120, 0, 0),
                         (ACT_VANILLA_BOMBFLOWER, 0, 0, -4430, 0, 0)]
     # warden arena
-    sc.actor(A_WARDEN, 0, 18, -5400, 0, FLAG_WARDEN_DEAD)
+    sc.actor(A_WARDEN, 0, 16, -5400, 0, FLAG_WARDEN_DEAD)
     sc.actor(A_BARRIER, 0, 0, s6_north_z + 14, 0, (BARRIER_CRYPT << 8) | FLAG_WARDEN_DEAD)
     # boss arena
-    sc.actor(A_QUEEN, 0, 22, -6900, 0, FLAG_QUEEN_DEAD)
+    sc.actor(A_QUEEN, 0, 16, -6900, 0, FLAG_QUEEN_DEAD)
     # spawn: the entry hall, facing north
     sc.spawn(0, 0, 250, 180, 'PLAYER_START_MODE_D')
     # light settings (7 areas)
@@ -1085,7 +1099,8 @@ def emit_scene_c(sc, idx, out):
         out.append('    { 700, -1, %s, CS_SCRIPT_ID_NONE, %s, CS_END_SFX_NONE, 255, %s, CS_END_CAM_0, 0 },\n' % (cam, nxt, hud[i]))
     out.append('};\n\n')
     # room: object list, actors, mesh shape
-    out.append('static s16 sLil%sRoomObjects[%d] = { %s };\n\n' % (nm, len(sc.objects), ', '.join(sc.objects)))
+    if sc.objects:
+        out.append('static s16 sLil%sRoomObjects[%d] = { %s };\n\n' % (nm, len(sc.objects), ', '.join(sc.objects)))
     out.append('static ActorEntry sLil%sRoomActors[] = {\n' % nm)
     n_actor = 0
     for (slot, x, y, z, yaw, params) in sorted(sc.actors, key=lambda a: (a[3], a[1], a[0])):
@@ -1103,9 +1118,11 @@ def emit_scene_c(sc, idx, out):
                '    SCENE_CMD_TIME_SETTINGS(255, 255, 0),\n'
                '    SCENE_CMD_ROOM_SHAPE(&sLil%sRoomShape),\n'
                '    SCENE_CMD_ECHO_SETTINGS(%d),\n'
-               '    SCENE_CMD_OBJECT_LIST(%d, sLil%sRoomObjects),\n'
+               '%s'
                '    SCENE_CMD_ACTOR_LIST(%d, sLil%sRoomActors),\n'
-               '    SCENE_CMD_END(),\n};\n\n' % (nm, sc.room_type, nm, sc.echo, len(sc.objects), nm, n_actor, nm))
+               '    SCENE_CMD_END(),\n};\n\n' % (nm, sc.room_type, nm, sc.echo,
+                                               ('    SCENE_CMD_OBJECT_LIST(%d, sLil%sRoomObjects),\n' % (len(sc.objects), nm)) if sc.objects else '',
+                                               n_actor, nm))
     out.append('static RomFile sLil%sRoomList[1] = { { 0, 0x10 } };\n' % nm)
     out.append('static SceneCmd* sLil%sRooms[1] = { sLil%sRoomHeader };\n\n' % (nm, nm))
     out.append('static SceneCmd sLil%sSceneHeader[] = {\n'
@@ -1195,10 +1212,33 @@ def emit_header(used_tex, model_decls, scenes):
     return ''.join(out)
 
 # --------------------------------------------------------------------------------------------------- validation
+# The game's default collision memory (BgCheck_Allocate) leaves room for roughly this many lookup nodes once the fixed
+# structures are accounted for. Nodes are spent per (polygon x spatial cell it touches) on a 16 x 4 x 16 grid.
+BGCHECK_NODE_BUDGET = 29000
+
+def estimate_collision_nodes(sc):
+    """Over-estimate (by polygon bounding box) of the static lookup nodes the game will need for this scene."""
+    verts, polys, surfaces, mn, mx = sc.col.finalize()
+    sub = (16, 4, 16)
+    cell = [int((mx[i] - mn[i]) / sub[i]) + 1 for i in range(3)]
+    total = 0
+    for (s_, a, b, c, nx, ny, nz, d) in polys:
+        pts = [verts[a], verts[b], verts[c]]
+        n = 1
+        for i in range(3):
+            lo = max(0, min(sub[i] - 1, int((min(p[i] for p in pts) - mn[i]) / cell[i])))
+            hi = max(0, min(sub[i] - 1, int((max(p[i] for p in pts) - mn[i]) / cell[i])))
+            n *= hi - lo + 1
+        total += n
+    return total
+
 def check_scene(sc):
     """Structural sanity checks on the generated collision/spawn data. Returns a list of problem strings."""
     problems = []
     verts, polys, surfaces, mn, mx = sc.col.finalize()
+    nodes = estimate_collision_nodes(sc)
+    if nodes > BGCHECK_NODE_BUDGET * 0.7:
+        problems.append('%s: collision needs up to ~%d lookup nodes, the default budget is ~%d' % (sc.name, nodes, BGCHECK_NODE_BUDGET))
     if len(verts) > 8000: problems.append('%s: too many collision vertices (%d)' % (sc.name, len(verts)))
     if len(polys) > 65000: problems.append('%s: too many collision polys' % sc.name)
     for (s, a, b, c, nx, ny, nz, d) in polys:
@@ -1231,16 +1271,93 @@ def check_scene(sc):
         if h is None and slot not in (A_BARRIER,): problems.append('%s: actor slot %d at (%d,%d,%d) has no floor' % (sc.name, slot, x, y, z))
     return problems
 
+
+# ------------------------------------------------------------------------------------------------ walkability test
+def _seg_tri_intersect(p, q, a, b, c):
+    """Does segment p-q cross triangle abc? (Moller-Trumbore)"""
+    d = v_sub(q, p)
+    e1, e2 = v_sub(b, a), v_sub(c, a)
+    h = v_cross(d, e2)
+    det = v_dot(e1, h)
+    if abs(det) < 1e-9: return False
+    f = 1.0 / det
+    sv = v_sub(p, a)
+    u = f * v_dot(sv, h)
+    if u < 0.0 or u > 1.0: return False
+    qv = v_cross(sv, e1)
+    v = f * v_dot(d, qv)
+    if v < 0.0 or u + v > 1.0: return False
+    t = f * v_dot(e2, qv)
+    return 0.0 <= t <= 1.0
+
+def check_routes(sc, routes, step_limit=22.0, body_heights=(30.0, 70.0), sample=15.0):
+    """Walks each route (list of (x, z)) and checks floor continuity, step heights and that no wall/ceiling poly blocks it."""
+    problems = []
+    verts, polys, surfaces, mn, mx = sc.col.finalize()
+    tris = []
+    floors = []
+    for (s_, a, b, c, nx, ny, nz, d) in polys:
+        A, B, C = verts[a], verts[b], verts[c]
+        (floors if ny >= 0x5000 else tris).append((A, B, C))
+    def floor_h(x, z, ref):
+        best = None
+        for (A, B, C) in floors:
+            den = (B[2] - C[2]) * (A[0] - C[0]) + (C[0] - B[0]) * (A[2] - C[2])
+            if den == 0: continue
+            w1 = ((B[2] - C[2]) * (x - C[0]) + (C[0] - B[0]) * (z - C[2])) / den
+            w2 = ((C[2] - A[2]) * (x - C[0]) + (A[0] - C[0]) * (z - C[2])) / den
+            w3 = 1 - w1 - w2
+            if min(w1, w2, w3) < -1e-6: continue
+            h = w1 * A[1] + w2 * B[1] + w3 * C[1]
+            if h <= ref + step_limit + 1 and (best is None or h > best): best = h
+        return best
+    for ri, route in enumerate(routes):
+        prev_h = None
+        for (p0, p1) in zip(route, route[1:]):
+            length = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+            n = max(1, int(math.ceil(length / sample)))
+            last = None
+            for i in range(n + 1):
+                t = i / n
+                x, z = p0[0] + (p1[0] - p0[0]) * t, p0[1] + (p1[1] - p0[1]) * t
+                h = floor_h(x, z, prev_h if prev_h is not None else 50.0)
+                if h is None:
+                    problems.append('%s route %d: no floor at (%.0f, %.0f)' % (sc.name, ri, x, z)); break
+                if prev_h is not None and abs(h - prev_h) > step_limit:
+                    problems.append('%s route %d: step of %.1f at (%.0f, %.0f)' % (sc.name, ri, h - prev_h, x, z))
+                if last is not None:
+                    for bh in body_heights:
+                        a = (last[0], last[2] + bh, last[1]); b = (x, h + bh, z)
+                        for (A, B, C) in tris:
+                            if _seg_tri_intersect(a, b, A, B, C):
+                                problems.append('%s route %d: blocked at (%.0f, %.0f) height +%.0f' % (sc.name, ri, x, z, bh)); break
+                last = (x, z, h)
+                prev_h = h
+    return problems
+
+SANCTUARY_ROUTES = [
+    # song arrival -> around the plinth -> the gate -> the tunnel to the crypt circle
+    [(0, 430), (0, 0), (150, 0), (150, -320), (0, -320), (0, -880), (0, -1250)],
+    # back out of the crypt to the home circle
+    [(0, -800), (0, -320), (150, -320), (150, 0), (520, 420)],
+]
+CRYPT_ROUTES = [[
+    (0, 250), (0, -500), (0, -1100), (0, -1700), (0, -2300), (0, -2900), (0, -3400), (0, -3900), (0, -4300), (0, -4560), (0, -4900),
+    (0, -5300), (0, -5990), (0, -6300), (0, -6700),
+]]
+
 def generate(check_only=False):
     sanctuary, crypt = build_sanctuary(), build_crypt()
     scenes = [sanctuary, crypt]
     problems = []
     for sc in scenes:
         problems += check_scene(sc)
+        problems += check_routes(sc, SANCTUARY_ROUTES if sc is sanctuary else CRYPT_ROUTES)
         verts, polys, surfaces, mn, mx = sc.col.finalize()
         tris = sum(len(t) for t in sc.mesh.tris.values())
-        print('%-10s render tris: %5d   collision: %5d polys %5d verts   bounds %s..%s   actors: %d' % (
-            sc.name, tris, len(polys), len(verts), mn, mx, len(sc.actors) + len(getattr(sc, 'actor_vanilla', []))))
+        print('%-10s render tris: %5d   collision: %5d polys %5d verts (<= %d lookup nodes of ~%d)   actors: %d' % (
+            sc.name, tris, len(polys), len(verts), estimate_collision_nodes(sc), BGCHECK_NODE_BUDGET,
+            len(sc.actors) + len(getattr(sc, 'actor_vanilla', []))))
     if problems:
         print('PROBLEMS:'); [print('  -', p) for p in problems]
         return 1

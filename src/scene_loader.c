@@ -124,15 +124,3 @@ RECOMP_HOOK("Room_RequestNewRoom") void Lil_OnRoomRequest(PlayState* play, RoomC
         osSendMesg(&roomCtx->loadQueue, NULL, OS_MESG_NOBLOCK);
     }
 }
-
-// Runs in the middle of BgCheck_Allocate, after the default memory size was chosen but before it is used. Our collision
-// meshes are much denser than most vanilla scenes, and our dynamic collision (gates, barriers) needs more room too.
-RECOMP_HOOK("BgCheck_GetSpecialSceneMaxObjects")
-void Lil_OnBgCheckLimits(PlayState* play, s32* maxNodes, s32* maxPolygons, s32* maxVertices) {
-    if (Lil_FindSceneDef(play->sceneId) != NULL) {
-        play->colCtx.memSize = 0x23000 * 2;
-        *maxNodes = 2000;
-        *maxPolygons = 1024;
-        *maxVertices = 1024;
-    }
-}

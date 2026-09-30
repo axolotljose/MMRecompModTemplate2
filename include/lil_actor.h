@@ -15,6 +15,21 @@
 #define LIL_FRAMES_PER_SECOND 20 // the game's update rate
 
 /* ---------------------------------------------------------------------------------------------------------------
+ * Damage tables
+ *
+ * A DamageTable entry is NOT a damage amount: it is an index into the game's multiplier list
+ * { 0x, 1x, 2x, 0.5x, 0.25x, 3x, 4x }, and the result multiplies the attacker's own damage (for Link: sword 1, Razor 2,
+ * Gilded 3; "strong" slashes double that).
+ * ------------------------------------------------------------------------------------------------------------- */
+#define LIL_DMG_NONE 0
+#define LIL_DMG_X1 1
+#define LIL_DMG_X2 2
+#define LIL_DMG_HALF 3
+#define LIL_DMG_QUARTER 4
+#define LIL_DMG_X3 5
+#define LIL_DMG_X4 6
+
+/* ---------------------------------------------------------------------------------------------------------------
  * Enemies
  * ------------------------------------------------------------------------------------------------------------- */
 typedef struct LilEnemyBase {
@@ -68,6 +83,10 @@ void Lil_DrawPart(PlayState* play, Gfx* dl, f32 x, f32 y, f32 z, s16 rotX, s16 r
 /* ---------------------------------------------------------------------------------------------------------------
  * Misc helpers
  * ------------------------------------------------------------------------------------------------------------- */
+// Spawns one of the mod's actors. Returns NULL (instead of spawning the wrong thing) if the actor could not be registered.
+// Pass a parent to spawn it as that actor's child.
+Actor* Lil_SpawnActor(PlayState* play, Actor* parent, LilActorSlot slot, f32 x, f32 y, f32 z, s16 rotX, s16 rotY, s16 rotZ,
+                      s32 params);
 void Lil_Puff(PlayState* play, Vec3f* pos, f32 scale);
 // Number of enemies of the mod that are alive (used by boss fights).
 s32 Lil_CountLilEnemies(PlayState* play);

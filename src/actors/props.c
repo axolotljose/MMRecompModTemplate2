@@ -56,8 +56,10 @@ void EnLilStatue_Destroy(Actor* thisx, PlayState* play) {
 
 void EnLilStatue_Update(Actor* thisx, PlayState* play) {
     EnLilStatue* this = (EnLilStatue*)thisx;
+    s32 waiting = !Flags_GetSwitch(play, this->flag) && (this->actor.xzDistToPlayer < STATUE_LISTEN_RANGE);
 
-    this->pulse += 0x180;
+    // While the gate is sealed and you stand before her, the statue's halo beats faster: she is waiting for the song.
+    this->pulse += waiting ? 0x3A0 : 0x120;
 }
 
 void EnLilStatue_Draw(Actor* thisx, PlayState* play) {

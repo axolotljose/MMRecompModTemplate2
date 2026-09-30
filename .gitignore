@@ -11,3 +11,7 @@
 patches.map
 build/
 .vscode/settings.json
+
+# build tooling / outputs
+.toolchain/
+__pycache__/

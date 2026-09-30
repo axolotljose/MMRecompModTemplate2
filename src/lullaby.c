@@ -23,6 +23,7 @@
  */
 
 #include "lil_actor.h"
+#include "lil_song_tracker.h"
 
 #define LIL_MAX_LISTENERS 12
 
@@ -38,15 +39,7 @@ typedef struct LilListener {
     LilLullabyHandler handler;
 } LilListener;
 
-/* Notes of the melody. */
-static const u8 sLilLullabyNotes[LIL_LULLABY_LENGTH] = {
-    OCARINA_BTN_C_UP, OCARINA_BTN_C_LEFT, OCARINA_BTN_C_RIGHT, OCARINA_BTN_C_LEFT,
-    OCARINA_BTN_C_UP, OCARINA_BTN_C_LEFT, OCARINA_BTN_C_DOWN,
-};
-
-static u8 sLilHistory[LIL_LULLABY_LENGTH];
-static u8 sLilHistoryCount;
-static u8 sLilLastStaffPos;
+static LilSongTracker sLilTracker;
 
 static LilListener sLilListeners[LIL_MAX_LISTENERS];
 
@@ -60,7 +53,6 @@ static u8 sLilAutosaveAdjusted;
 
 static PlayState* sLilPlayForWarpHook;
 
-u32 gLilLullabyFrame;
 u8 gLilWarpBlocked;
 
 /* ------------------------------------------------------------------------------------------------------------------
@@ -104,84 +96,12 @@ static void Lil_ClearListeners(void) {
     }
 }
 
-s32 Lil_LullabyPlayedRecently(PlayState* play, u32 frames) {
-    return (gLilLullabyFrame != 0) && ((play->gameplayFrames - gLilLullabyFrame) <= frames);
-}
-
 /* ------------------------------------------------------------------------------------------------------------------
- * Note tracking
+ * Note tracking (the logic lives in lil_song_tracker.h so it can be unit tested off-game)
  * ---------------------------------------------------------------------------------------------------------------- */
-static void Lil_ResetTracker(void) {
-    sLilHistoryCount = 0;
-    sLilLastStaffPos = 0;
-}
-
-static void Lil_PushNote(u8 button) {
-    s32 i;
-
-    if (sLilHistoryCount < LIL_LULLABY_LENGTH) {
-        sLilHistory[sLilHistoryCount++] = button;
-    } else {
-        for (i = 0; i < LIL_LULLABY_LENGTH - 1; i++) {
-            sLilHistory[i] = sLilHistory[i + 1];
-        }
-        sLilHistory[LIL_LULLABY_LENGTH - 1] = button;
-    }
-}
-
-static s32 Lil_HistoryMatchesMelody(void) {
-    s32 i;
-
-    if (sLilHistoryCount < LIL_LULLABY_LENGTH) {
-        return false;
-    }
-    for (i = 0; i < LIL_LULLABY_LENGTH; i++) {
-        if (sLilHistory[i] != sLilLullabyNotes[i]) {
-            return false;
-        }
-    }
-    return true;
-}
-
-/**
- * Feeds one staff update into the tracker. Returns true when the last LIL_LULLABY_LENGTH notes are the melody.
- * `pos` is the number of notes played in the current 8 note window (it wraps from 8 to 1, and is 0 when the ocarina was
- * just opened), `buttonIndex` is the last button played, `state` is 0xFE while no vanilla song has been recognised.
- */
-static s32 Lil_FeedStaff(u8 pos, u8 buttonIndex, u8 state) {
-    u8 expectedPos;
-
-    if (state < 0xFE) {
-        // The game recognised one of its own songs, never treat that as ours.
-        Lil_ResetTracker();
-        return false;
-    }
-
-    if (pos == 0) {
-        Lil_ResetTracker();
-        return false;
-    }
-
-    if (pos == sLilLastStaffPos) {
-        return false;
-    }
-
-    if (sLilLastStaffPos != 0) {
-        expectedPos = (sLilLastStaffPos % 8) + 1;
-        if (pos != expectedPos) {
-            // One or more notes went by unseen, the history is no longer trustworthy.
-            sLilHistoryCount = 0;
-        }
-    }
-
-    sLilLastStaffPos = pos;
-    if (buttonIndex > OCARINA_BTN_C_UP) {
-        sLilHistoryCount = 0;
-        return false;
-    }
-    Lil_PushNote(buttonIndex);
-    return Lil_HistoryMatchesMelody();
-}
+_Static_assert(OCARINA_BTN_A == LIL_NOTE_A && OCARINA_BTN_C_DOWN == LIL_NOTE_C_DOWN && OCARINA_BTN_C_RIGHT == LIL_NOTE_C_RIGHT &&
+                   OCARINA_BTN_C_LEFT == LIL_NOTE_C_LEFT && OCARINA_BTN_C_UP == LIL_NOTE_C_UP,
+               "song tracker button values must match the game's OcarinaButtonIndex");
 
 /* ------------------------------------------------------------------------------------------------------------------
  * Closing the ocarina
@@ -208,11 +128,15 @@ static s32 Lil_CanWarp(PlayState* play) {
 
 static void Lil_StartWarpToSanctuary(PlayState* play) {
     Player* player = GET_PLAYER(play);
+    RespawnData savedTop = gSaveContext.respawn[RESPAWN_MODE_TOP];
 
-    // Remember exactly where the player is standing so that the song can bring them back to the same spot.
+    // Remember exactly where the player is standing so that the song can bring them back to the same spot. The game's own
+    // helper fills in the respawn record (scene, room, position, yaw, temporary flags); it writes into the "top" slot, so
+    // the slot's previous contents are put back straight away and the game's own data is left untouched.
     Play_SetRespawnData(play, RESPAWN_MODE_TOP, gSaveContext.save.entrance, play->roomCtx.curRoom.num,
                         PLAYER_PARAMS(0xFF, PLAYER_START_MODE_D), &player->actor.world.pos, player->actor.shape.rot.y);
     sLilOrigin = gSaveContext.respawn[RESPAWN_MODE_TOP];
+    gSaveContext.respawn[RESPAWN_MODE_TOP] = savedTop;
     sLilOriginSaveEntrance = gSaveContext.save.entrance;
     sLilOriginValid = true;
 
@@ -249,17 +173,9 @@ void Lil_FadeHome(PlayState* play) {
     }
 }
 
-void Lil_RequestWarpHome(PlayState* play) {
-    if (Lil_CanWarp(play) && (sLilWarpKind == LIL_WARP_NONE)) {
-        Lil_StartWarpHome(play);
-    }
-}
-
 static void Lil_OnMelodyPlayed(PlayState* play) {
     s32 consumed = false;
     s32 i;
-
-    gLilLullabyFrame = (play->gameplayFrames != 0) ? play->gameplayFrames : 1;
 
     // The lullaby soothes hostile things. If anything awake is around, it is lulled to sleep instead of the song
     // taking you away: you cannot leave the Crypt with monsters on your heels (play it again once they sleep).
@@ -305,13 +221,13 @@ RECOMP_HOOK("Message_Update") void Lil_OnMessageUpdate(PlayState* play) {
     OcarinaStaff* staff;
 
     if ((msgCtx->msgMode != MSGMODE_OCARINA_PLAYING) || (msgCtx->ocarinaAction != OCARINA_ACTION_FREE_PLAY)) {
-        Lil_ResetTracker();
+        LilSong_Reset(&sLilTracker);
         return;
     }
 
     staff = AudioOcarina_GetPlayingStaff();
-    if (Lil_FeedStaff(staff->pos, staff->buttonIndex, staff->state)) {
-        Lil_ResetTracker();
+    if (LilSong_Feed(&sLilTracker, staff->pos, staff->buttonIndex, staff->state)) {
+        LilSong_Reset(&sLilTracker);
         Lil_OnMelodyPlayed(play);
     }
 }
@@ -332,7 +248,7 @@ RECOMP_HOOK("Play_Init") void Lil_OnPlayInit(GameState* thisx) {
     Lil_RegisterTables();
     Lil_RegisterActors();
     Lil_ClearListeners();
-    Lil_ResetTracker();
+    LilSong_Reset(&sLilTracker);
     sLilWarpKind = LIL_WARP_NONE;
     gLilWarpBlocked = 0;
 }
@@ -346,6 +262,9 @@ RECOMP_CALLBACK("*", recomp_on_autosave) void Lil_BeforeAutosave(PlayState* play
     sLilAutosaveAdjusted = false;
 
     if (LIL_IS_CUSTOM_SCENE(play->sceneId)) {
+        // Switch / chest / collectible flags live in the actor context until a scene is left: flush them so the save
+        // contains the progress made so far in the Crypt.
+        Play_SaveCycleSceneFlags(play);
         gSaveContext.save.entrance = sLilOriginValid ? sLilOriginSaveEntrance : ENTRANCE(SOUTH_CLOCK_TOWN, 0);
         sLilAutosaveAdjusted = true;
     }

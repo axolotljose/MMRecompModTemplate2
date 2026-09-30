@@ -13,16 +13,24 @@
 
 #include "lil_actor.h"
 
-#define DT(dmg) DMG_ENTRY(dmg, 0)
+#define DT(mult) DMG_ENTRY(mult, 0)
+#define X0 LIL_DMG_NONE
+#define X1 LIL_DMG_X1
+#define X2 LIL_DMG_X2
+#define X3 LIL_DMG_X3
+#define X4 LIL_DMG_X4
+
+// Damage multipliers per damage type (see lil_actor.h). Bosses are tougher on the weak stuff, and light arrows / bombs /
+// Goron attacks stand out. Both bosses are only vulnerable part of the time and take double damage then.
 static DamageTable sBossDamageTable = {
-    /* Deku Nut       */ DT(0), /* Deku Stick     */ DT(1), /* Horse trample  */ DT(0), /* Explosives     */ DT(3),
-    /* Zora boomerang */ DT(1), /* Normal arrow   */ DT(1), /* UNK_DMG_0x06   */ DT(0), /* Hookshot       */ DT(0),
-    /* Goron punch    */ DT(2), /* Sword          */ DT(1), /* Goron pound    */ DT(3), /* Fire arrow     */ DT(2),
-    /* Ice arrow      */ DT(2), /* Light arrow    */ DT(3), /* Goron spikes   */ DT(2), /* Deku spin      */ DT(1),
-    /* Deku bubble    */ DT(1), /* Deku launch    */ DT(2), /* UNK_DMG_0x12   */ DT(0), /* Zora barrier   */ DT(0),
-    /* Normal shield  */ DT(0), /* Light ray      */ DT(0), /* Thrown object  */ DT(1), /* Zora punch     */ DT(1),
-    /* Spin attack    */ DT(2), /* Sword beam     */ DT(1), /* Normal Roll    */ DT(0), /* UNK_DMG_0x1B   */ DT(0),
-    /* UNK_DMG_0x1C   */ DT(0), /* Unblockable    */ DT(0), /* UNK_DMG_0x1E   */ DT(0), /* Powder Keg     */ DT(4),
+    /* Deku Nut       */ DT(X0), /* Deku Stick     */ DT(X1), /* Horse trample  */ DT(X0), /* Explosives     */ DT(X2),
+    /* Zora boomerang */ DT(X1), /* Normal arrow   */ DT(X1), /* UNK_DMG_0x06   */ DT(X0), /* Hookshot       */ DT(X0),
+    /* Goron punch    */ DT(X2), /* Sword          */ DT(X1), /* Goron pound    */ DT(X2), /* Fire arrow     */ DT(X2),
+    /* Ice arrow      */ DT(X2), /* Light arrow    */ DT(X3), /* Goron spikes   */ DT(X2), /* Deku spin      */ DT(X1),
+    /* Deku bubble    */ DT(X1), /* Deku launch    */ DT(X2), /* UNK_DMG_0x12   */ DT(X0), /* Zora barrier   */ DT(X0),
+    /* Normal shield  */ DT(X0), /* Light ray      */ DT(X0), /* Thrown object  */ DT(X1), /* Zora punch     */ DT(X1),
+    /* Spin attack    */ DT(X2), /* Sword beam     */ DT(X1), /* Normal Roll    */ DT(X0), /* UNK_DMG_0x1B   */ DT(X0),
+    /* UNK_DMG_0x1C   */ DT(X0), /* Unblockable    */ DT(X0), /* UNK_DMG_0x1E   */ DT(X0), /* Powder Keg     */ DT(X4),
 };
 
 static InitChainEntry sBossInitChain[] = {
@@ -386,6 +394,7 @@ typedef struct BossLilQueen {
 } BossLilQueen;
 
 #define QUEEN_HEALTH 36
+#define QUEEN_DAIS_HEIGHT 16.0f // the arena floor is this far below the queen's home position
 #define QUEEN_HOVER_HEIGHT 120.0f
 #define QUEEN_TRIGGER 760.0f
 #define QUEEN_LISTEN_RANGE 1500.0f
@@ -481,8 +490,8 @@ void BossLilQueen_Init(Actor* thisx, PlayState* play) {
     this->flag = this->actor.params & 0x7F;
     if (Flags_GetSwitch(play, this->flag)) {
         // Already defeated: leave the way home open.
-        Actor_Spawn(&play->actorCtx, play, gLilActorIds[LIL_ACT_RETURN_PORTAL], this->actor.home.pos.x,
-                    this->actor.home.pos.y, this->actor.home.pos.z + 260.0f, 0, 0, 0, LIL_PORTAL_HOME);
+        Lil_SpawnActor(play, NULL, LIL_ACT_RETURN_PORTAL, this->actor.home.pos.x, this->actor.home.pos.y - QUEEN_DAIS_HEIGHT,
+                       this->actor.home.pos.z + 260.0f, 0, 0, 0, LIL_PORTAL_HOME);
         Actor_Kill(&this->actor);
         return;
     }
@@ -625,8 +634,8 @@ void BossLilQueen_Update(Actor* thisx, PlayState* play) {
                     for (i = 0; i < 2; i++) {
                         f32 sx = (i == 0) ? -240.0f : 240.0f;
 
-                        if (Actor_SpawnAsChild(&play->actorCtx, actor, play, gLilActorIds[LIL_ACT_PETAL_WISP], this->center.x + sx,
-                                               this->center.y + 90.0f, this->center.z + 120.0f, 0, 0, 0, LIL_ENEMY_PARAM_AWAKE) != NULL) {
+                        if (Lil_SpawnActor(play, actor, LIL_ACT_PETAL_WISP, this->center.x + sx, this->center.y + 90.0f,
+                                           this->center.z + 120.0f, 0, 0, 0, LIL_ENEMY_PARAM_AWAKE) != NULL) {
                             Vec3f pos;
 
                             pos.x = this->center.x + sx;
@@ -685,8 +694,8 @@ void BossLilQueen_Update(Actor* thisx, PlayState* play) {
                 rewardPos.y += 20.0f;
                 Flags_SetSwitch(play, this->flag);
                 Item_DropCollectible(play, &rewardPos, ITEM00_HEART_CONTAINER);
-                Actor_Spawn(&play->actorCtx, play, gLilActorIds[LIL_ACT_RETURN_PORTAL], this->center.x, this->center.y,
-                            this->center.z + 260.0f, 0, 0, 0, LIL_PORTAL_HOME);
+                Lil_SpawnActor(play, NULL, LIL_ACT_RETURN_PORTAL, this->center.x, this->center.y - QUEEN_DAIS_HEIGHT,
+                               this->center.z + 260.0f, 0, 0, 0, LIL_PORTAL_HOME);
                 Audio_PlaySfx(NA_SE_SY_CORRECT_CHIME);
                 Audio_RestorePrevBgm();
                 gLilWarpBlocked = 0;
