@@ -1,0 +1,34 @@
+name: Build mod
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Song tracker unit tests
+        run: |
+          gcc -std=c99 -Wall -Wextra -I src -o /tmp/test_song tools/tests/test_song.c
+          /tmp/test_song
+
+      - name: Validate the generated layout (floors, spawns, walkability of every route)
+        run: python3 tools/gen_world.py --check
+
+      # Installs Zig (bundled clang 18 + lld), builds RecompModTool from the pinned N64Recomp commit, compiles and packages.
+      - name: Build the mod
+        run: tools/build_linux.sh
+
+      - name: Upload the mod
+        uses: actions/upload-artifact@v4
+        with:
+          name: lilith_lullaby_white_rose
+          path: dist/*.nrm

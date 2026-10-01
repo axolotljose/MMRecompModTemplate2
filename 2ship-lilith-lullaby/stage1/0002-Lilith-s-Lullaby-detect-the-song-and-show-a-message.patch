@@ -1,0 +1,100 @@
+From 946caadf5756ceed30ef586e70598d59ec250fa2 Mon Sep 17 00:00:00 2001
+From: Arena Agent <agent@arena.ai>
+Date: Thu, 1 Oct 2026 11:39:12 +0000
+Subject: [PATCH 2/3] Lilith's Lullaby: detect the song and show a message
+
+Registers the gEnhancements.Songs.LilithsLullaby enhancement. While the
+CVar is enabled, OnGameStateUpdate polls the playing ocarina staff (the same
+one Message_Update reads in MSGMODE_OCARINA_PLAYING) during a free play
+session and feeds it to the song matcher. When the melody is played it
+plays the vanilla "song accepted" chime and shows a notification.
+
+The vanilla ocarina tables are untouched: the song is matched on the side
+instead of being added as a 25th vanilla song, which would also require the
+quest item bit to be set.
+
+There is no menu entry yet, so the CVar can only be set by hand for now.
+The warp itself comes in a later stage.
+---
+ mm/2s2h/Enhancements/Songs/LilithsLullaby.cpp | 69 +++++++++++++++++++
+ 1 file changed, 69 insertions(+)
+ create mode 100644 mm/2s2h/Enhancements/Songs/LilithsLullaby.cpp
+
+diff --git a/mm/2s2h/Enhancements/Songs/LilithsLullaby.cpp b/mm/2s2h/Enhancements/Songs/LilithsLullaby.cpp
+new file mode 100644
+index 0000000..e58a600
+--- /dev/null
++++ b/mm/2s2h/Enhancements/Songs/LilithsLullaby.cpp
+@@ -0,0 +1,69 @@
++#include <libultraship/bridge/consolevariablebridge.h>
++#include "2s2h/BenGui/Notification.h"
++#include "2s2h/GameInteractor/GameInteractor.h"
++#include "2s2h/ShipInit.hpp"
++#include "2s2h/Enhancements/Songs/LilithsLullabyTracker.h"
++
++extern "C" {
++#include "variables.h"
++#include "functions.h"
++#include <z64ocarina.h>
++}
++
++/*
++ * Lilith's Lullaby, a new ocarina song: C-Up, C-Left, C-Right, C-Left, C-Up, C-Left, C-Down.
++ *
++ * The vanilla ocarina code only knows its own songs and only lets a song be played once its quest item is owned, so the
++ * song is not added to the vanilla tables. Instead the notes of a free play session are watched (the same ocarina staff
++ * Message_Update reads in MSGMODE_OCARINA_PLAYING) and the melody is matched by LilithsLullabyTracker.h.
++ *
++ * Stage 1: playing the song shows a message. The warp comes in the next stage.
++ */
++
++#define CVAR_NAME "gEnhancements.Songs.LilithsLullaby"
++#define CVAR CVarGetInteger(CVAR_NAME, 0)
++
++static_assert(OCARINA_BTN_A == LilithsLullaby::NOTE_A && OCARINA_BTN_C_DOWN == LilithsLullaby::NOTE_C_DOWN &&
++                  OCARINA_BTN_C_RIGHT == LilithsLullaby::NOTE_C_RIGHT &&
++                  OCARINA_BTN_C_LEFT == LilithsLullaby::NOTE_C_LEFT && OCARINA_BTN_C_UP == LilithsLullaby::NOTE_C_UP,
++              "LilithsLullabyTracker.h note values must match the game's OcarinaButtonIndex");
++
++static LilithsLullaby::Tracker sTracker;
++
++static void OnLullabyPlayed() {
++    // The same chime the game plays when it accepts a song.
++    Audio_PlaySfx(NA_SE_SY_CORRECT_CHIME);
++    Notification::Emit({
++        .prefix = "Lilith's Lullaby",
++        .message = "played",
++        .remainingTime = 3.0f,
++        .mute = true,
++    });
++}
++
++static void PollOcarina() {
++    if (gPlayState == nullptr) {
++        sTracker.Reset();
++        return;
++    }
++
++    MessageContext* msgCtx = &gPlayState->msgCtx;
++    if (msgCtx->msgMode != MSGMODE_OCARINA_PLAYING || msgCtx->ocarinaAction != OCARINA_ACTION_FREE_PLAY) {
++        sTracker.Reset();
++        return;
++    }
++
++    OcarinaStaff* staff = AudioOcarina_GetPlayingStaff();
++    if (sTracker.Feed(staff->pos, staff->buttonIndex, staff->state)) {
++        sTracker.Reset();
++        OnLullabyPlayed();
++    }
++}
++
++static void RegisterLilithsLullaby() {
++    sTracker.Reset();
++
++    COND_HOOK(OnGameStateUpdate, CVAR, PollOcarina);
++}
++
++static RegisterShipInitFunc initFunc(RegisterLilithsLullaby, { CVAR_NAME });
+-- 
+2.39.5
+

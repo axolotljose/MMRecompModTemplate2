@@ -1,0 +1,32 @@
+From a0a32408b5dae93b350552751fa2e0665b22874a Mon Sep 17 00:00:00 2001
+From: Arena Agent <agent@arena.ai>
+Date: Thu, 1 Oct 2026 11:42:29 +0000
+Subject: [PATCH 3/3] Lilith's Lullaby: add the Enhancements menu toggle
+
+Adds a "Lilith's Lullaby" checkbox for gEnhancements.Songs.LilithsLullaby
+to the Ocarina column of Enhancements > Items/Songs, right after
+"Enable Sun's Song". The tooltip lists the notes and says that, for now,
+playing the song only shows a message.
+---
+ mm/2s2h/BenGui/BenMenu.cpp | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/mm/2s2h/BenGui/BenMenu.cpp b/mm/2s2h/BenGui/BenMenu.cpp
+index a333536..95977e5 100644
+--- a/mm/2s2h/BenGui/BenMenu.cpp
++++ b/mm/2s2h/BenGui/BenMenu.cpp
+@@ -1533,6 +1533,11 @@ void BenMenu::AddEnhancements() {
+             "Enables the partially implemented Sun's Song. RIGHT-DOWN-UP-RIGHT-DOWN-UP to play it. "
+             "This song will make time move very fast until either Link moves to a different scene, "
+             "or when the time switches to a new time period."));
++    AddWidget(path, "Lilith's Lullaby", WIDGET_CVAR_CHECKBOX)
++        .CVar("gEnhancements.Songs.LilithsLullaby")
++        .Options(CheckboxOptions().Tooltip("Adds a new ocarina song, Lilith's Lullaby. C-UP, C-LEFT, C-RIGHT, C-LEFT, "
++                                           "C-UP, C-LEFT, C-DOWN to play it.\n\n"
++                                           "Work in progress: for now, playing the song only shows a message."));
+     AddWidget(path, "D-pad Ocarina", WIDGET_CVAR_CHECKBOX)
+         .CVar("gEnhancements.Playback.DpadOcarina")
+         .Options(CheckboxOptions().Tooltip("Enables using the D-pad for Ocarina playback."));
+-- 
+2.39.5
+
