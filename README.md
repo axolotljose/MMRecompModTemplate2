@@ -10,17 +10,21 @@ A **Majora's Mask: Recompiled** mod that adds a new ocarina song, a hidden garde
 
 The mod is **self contained**: it has no dependencies (no Scene API, no custom actor library) and it uses no assets other than what the game itself already contains.
 
-> **Status: built and statically validated, not yet playtested in the game.** The code compiles and links against the game's
-> decompilation headers, the mod tool resolves every game function and data symbol the mod uses, the song detection and
-> the dungeon layout have automated tests, and I rendered the generated levels and models to check them by eye. What has
-> *not* been done is running it inside Zelda 64: Recompiled, because that needs a game ROM and the desktop runtime. Expect
-> some rough edges (balance, visuals, edge cases), and please report what you find. See
-> [docs/DESIGN.md](docs/DESIGN.md#verification-and-known-limitations) for exactly what is and isn't verified.
+> **Status: 0.1.1, built and statically validated, but not yet confirmed to run in the game.** Version 0.1.0 failed to load in
+> Zelda 64: Recompiled (*error loading mods: failed to load mod code (code mod loading internal error)*): it hooked five game
+> functions and the game could not prepare at least one of them. 0.1.1 hooks only two (the same two the Scene API mod hooks) and
+> uses the game's own events for everything else. The code compiles and links against the game's decompilation headers, the
+> mod tool resolves every game function and data symbol the mod uses, the song detection and the dungeon layout have automated
+> tests, and I rendered the generated levels and models to check them by eye. What has *not* been done is running it inside
+> Zelda 64: Recompiled, because that needs a game ROM and the desktop runtime. Expect some rough edges (balance, visuals, edge
+> cases), and please report what you find. See [docs/DESIGN.md](docs/DESIGN.md#verification-and-known-limitations) for exactly
+> what is and isn't verified, and what went wrong in 0.1.0.
 
 ## Install
 
 1. Get `lilith_lullaby_white_rose.nrm` (from `dist/` in this repo, from a [CI build artifact](../../actions), or build it yourself, see below).
-2. Put it in the `mods` folder of Zelda 64: Recompiled (Settings -> Mods -> *Open Mods Folder*), then enable it in the mod menu. Needs Zelda 64: Recompiled 1.2.2 or newer.
+2. Put it in the `mods` folder of Zelda 64: Recompiled (Settings -> Mods -> *Open Mods Folder*), then enable it in the mod menu. Needs Zelda 64: Recompiled 1.2.2 or newer. If you installed an older copy, replace it (the file
+   name is the same); the mod menu shows the version, which should read **0.1.1**.
 
 ## How to play
 
@@ -88,9 +92,18 @@ Health is in the game's own units: a Kokiri Sword slash does 1, the Razor Sword 
 
 ## Compatibility
 
-* No dependencies. It only **hooks** game functions (it patches nothing), so it coexists with other mods that do the same.
+* No dependencies. It patches nothing and hooks only two game functions (`Play_InitScene` and `Room_RequestNewRoom`, the same two the
+  Scene API mod hooks); everything else runs from events the game raises itself. So it coexists with other mods that hook the same functions.
 * It claims two unused scene slots (`SCENE_UNSET_3A`, `SCENE_UNSET_31`), two unused entrance slots (`ENTR_SCENE_UNSET_37`, `ENTR_SCENE_UNSET_2E`) and 13 unused entries of the actor table (picked at runtime). The Scene API mod uses `SCENE_UNSET_01` / `ENTR_SCENE_UNSET_08`, so the two can be installed together.
-* A mod that also redirects the destination of the Song of Soaring warp (`EnTest7_WarpCsWarp`) could conflict.
+* A mod that also redirects the destination of the Song of Soaring warp (by changing `play->nextEntrance` while that cutscene runs) could conflict.
+
+## Troubleshooting
+
+* **"error loading mods: failed to load mod code (code mod loading internal error)"**, with no mod id: the game could not prepare
+  one of the game functions that some enabled mod hooks. This mod only hooks `Play_InitScene` and `Room_RequestNewRoom`. If you
+  still see the error, try with only this mod enabled (any other mod that hooks a function the game cannot prepare causes the same
+  message), then start the game from a terminal and look at the lines it prints before the error, and report them together with the
+  game version. `python3 tools/inspect_nrm.py dist/lilith_lullaby_white_rose.nrm` shows exactly what a build asks the game to do.
 
 ## Building from source
 
@@ -117,6 +130,7 @@ tools/gen_world.py            the generator for src/gen: edit the layout there, 
 tools/preview.py              software renders of the generated levels/models (docs/previews/)
 tools/tests/test_song.c       unit test for the song tracker
 tools/build_linux.sh          one command build
+tools/inspect_nrm.py          lists what a built .nrm asks the game to do (hooked game functions by name, events); the build fails on unexpected hooks
 docs/DESIGN.md                how it works, verification status, known limitations
 ```
 

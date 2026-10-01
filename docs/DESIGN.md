@@ -8,7 +8,7 @@ Decomp references are to the `mm-decomp` commit this repo pins (`385c45ad`), the
 ```
 player plays C-Up C-Left C-Right C-Left C-Up C-Left C-Down
         |
-        v   hook: Message_Update (src/lullaby.c, matcher in src/lil_song_tracker.h)
+        v   event: recomp_after_play_update (src/lullaby.c, matcher in src/lil_song_tracker.h)
   close the ocarina like a B press
         |
         +-- a listener wants the song (statue, boss) ........ consumed, ocarina ends
@@ -31,7 +31,7 @@ player plays C-Up C-Left C-Right C-Left C-Up C-Left C-Down
 **Detection.** The vanilla ocarina only recognises its 24 songs, and only lets you play one if the matching quest item bit is
 set, so the mod does not hijack a slot. `AudioOcarina_GetPlayingStaff()` exposes the live staff: `pos` (notes played in the
 current 8 note window, wraps 8 -> 1, 0 right after the ocarina opens), `buttonIndex` (last button) and `state` (`0xFE` while no
-vanilla song was recognised). Each frame (`Message_Update`, only while `msgMode == MSGMODE_OCARINA_PLAYING` with
+vanilla song was recognised). Each frame (`recomp_after_play_update`, only while `msgMode == MSGMODE_OCARINA_PLAYING` with
 `OCARINA_ACTION_FREE_PLAY`) a change of `pos` means a new note; the last 7 notes are compared with the melody. A vanilla song
 being recognised, a skipped staff position (a note went by unseen) or `pos == 0` reset the history.
 
@@ -45,7 +45,11 @@ note, truncated, and so on.
 
 **Warp to the Sanctuary.** Setting `ocarinaMode` to a `OCARINA_MODE_WARP_TO_*` value is all it takes: `Player_Action_63` then
 spawns `EnTest7` (the feather / wind capsule cutscene actor) by itself. `EnTest7_WarpCsWarp` picks the destination entrance
-from a table and starts the transition; a return hook on it overwrites `play->nextEntrance` with the Sanctuary. The Sanctuary's
+from a table and starts the transition during the actor update, and `Play_UpdateMain` only reads `play->nextEntrance` at the start
+of the next frame. So `recomp_after_play_update` overwrites it with the Sanctuary (`Lil_RedirectOwlWarp`), but only when it is
+exactly the destination the vanilla code chose for the mode we asked for (`ENTRANCE(SOUTH_CLOCK_TOWN, 9)`, or
+`ENTRANCE(IKANA_CANYON, 6)` inside the Secret Shrine, a vanilla special case), so no other transition can be redirected by
+mistake. (Version 0.1.0 hooked `EnTest7_WarpCsWarp` instead, see "What went wrong in the first version" below.) The Sanctuary's
 arrival spawn uses `PLAYER_START_MODE_OWL`, so `EnTest7` also plays the vanilla arrival cutscene. Before leaving, the player's
 exact position is captured with the game's own `Play_SetRespawnData` (the `respawn[TOP]` slot is restored immediately, so the
 game's data is untouched).
@@ -72,7 +76,7 @@ The approach matches the Scene API mod (CC0), with one scene per slot instead of
   is loading from the id alone (game over, void out, continue, autosave...).
 * `Lil_RegisterTables` fills `gSceneTable`, `sSceneEntranceTable` (16 layers per spawn, because `Entrance_GetTableEntry` also
   indexes by the current scene layer) and `sPersistentCycleSceneFlags` (progress survives the three day reset). It runs on
-  every `Play_Init`, so it does not depend on when the game's own static data is initialised.
+  every `Play_Init` (through the `recomp_on_play_init` event), so it does not depend on when the game's own static data is initialised.
 * The scene table entry points at the real scene file `Z2_INSIDETOWER` so the game's DMA request stays valid; the hook on
   `Play_InitScene` then replaces `play->sceneSegment` with the mod's scene header, and `Room_RequestNewRoom` answers with the
   mod's room data (the vanilla function does nothing once the request status is set).
@@ -138,32 +142,59 @@ real bug during development: a pillar standing in the boss arena's doorway.)
   GitHub / PyPI fetches (under a minute, no warnings). GitHub Actions does the same on a clean runner. A second, independent
   rebuild reproduced `mod_binary.bin`, `mod_syms.bin`, `mod.json` and `thumb.png` byte for byte (only the zip timestamps differ).
 
-**Verified against the runtime's source (read, not run).** Everything the game has to resolve when it loads the mod was
-checked against Zelda 64: Recompiled (`v1.2.2`, the latest release, and `dev`) and N64ModernRuntime instead of being assumed:
+**Verified against the runtime's source (read, not run).** What the game has to resolve when it loads the mod was checked against
+the Zelda 64: Recompiled `v1.2.2` tag and the N64ModernRuntime commit it pins (`df7e820`), instead of being assumed:
 
-* The two event callbacks, `recomp_on_autosave` and `recomp_after_autosave`, are declared by the game's `patches/autosaving.c`
-  with the same `(PlayState*)` signature, in `v1.2.2` as well as `dev`.
+* The four events the mod listens to (`recomp_on_play_init`, `recomp_after_play_update`, `recomp_on_autosave`,
+  `recomp_after_autosave`) are declared by the game's patches at the `v1.2.2` tag with a `(PlayState*)` parameter.
+  `recomp_on_play_init` is the first statement of the game's `Play_Init`, and `recomp_after_play_update` runs right after
+  `Play_Update` in `Play_Main`.
 * The one import, `recomp_printf`, is exported by the game's `patches/print.c`.
-* All five hook targets (`Message_Update`, `EnTest7_WarpCsWarp`, `Play_Init`, `Play_InitScene`, `Room_RequestNewRoom`) are
-  ordinary recompiled functions with a non-zero size. None is stubbed, ignored or natively reimplemented (the loader rejects
-  those as `CannotBeHooked`). The game itself replaces `Play_Init`, and the loader has a dedicated path that applies mod hooks to
-  base-patched functions.
-* `EnTest7_WarpCsWarp` is also what the game's "skip the Song of Soaring cutscene" patch (`patches/skip_sos.c`) calls when A or B
-  is pressed, so the destination override covers a skipped warp too.
+* The two hooked functions (`Play_InitScene`, `Room_RequestNewRoom`) exist with a non-zero size and are not stubbed, ignored or
+  natively reimplemented. The Scene API mod (needs recomp 1.2.2) hooks the same two on the same runtime, and so does an older
+  scene proof of concept (needs 1.2.0).
+* `EnTest7_WarpCsWarp` (no longer hooked) is what the game's "skip the Song of Soaring cutscene" patch (`patches/skip_sos.c`)
+  calls when A or B is pressed, so the destination override in `Lil_RedirectOwlWarp` covers a skipped warp too: it looks at the
+  result, not at the call.
 * The manifest `id` passes N64Recomp's own `validate_mod_id` (I ran the real function; it rejects malformed ids), and
   `minimum_recomp_version` (1.2.2) is the latest release.
+
+This kind of checking is necessary but **not sufficient**, as the next section shows. A symbol that exists in the symbol file is
+not the same as a function the runtime can regenerate, and my first round of reading looked at the newest runtime source instead
+of the version the game actually pins.
+
+**What went wrong in the first version (0.1.0).** Its first real run failed to load: *error loading mods: failed to load mod code
+(code mod loading internal error)*, with no mod id in the message. The runtime in Zelda 64: Recompiled 1.2.2 (the release I read the source of; I do not know which
+version the failing run used) loads a code mod in three steps. In the first two (compile the mod's own code with the live recompiler; resolve its imports, events and hooks) an
+error names the mod. The third step **regenerates every hooked game function from the ROM**, again with the live recompiler, and
+an error there carries no mod id: one function that cannot be regenerated rejects the whole mod. 0.1.0 hooked five game functions
+(`Message_Update`, `Play_Init`, `Play_InitScene`, `Room_RequestNewRoom` and, at both entry and return, `EnTest7_WarpCsWarp`).
+The build tool cannot see this, it only checks that the symbols exist, and I cannot run the game's ROM here, so **I could not
+determine which function failed**. The prime suspect is `EnTest7_WarpCsWarp`: an actor overlay function hooked at entry and at
+return, in an overlay that the game itself patches (`EnTest7_Update`), and the only one of the five that no mod I could find
+hooks (shipping mods hook the other four). So 0.1.1 **hooks only `Play_InitScene` and `Room_RequestNewRoom`** and does everything
+else from events the game raises itself: `recomp_on_play_init`, `recomp_after_play_update` and the autosave events. Events are
+called from the game's own, already compiled code and cost nothing at load time.
+
+`tools/inspect_nrm.py` prints, by name, which game functions a built mod asks the runtime to regenerate and which events it uses.
+`tools/build_linux.sh` runs it and fails the build if the mod hooks anything outside an allowlist (`LIL_ALLOWED_HOOKS`), and CI
+does the same, so adding a hook is a conscious, game-tested decision.
 
 **Not verified: anything that needs the game running.** The mod was written against the decomp source, not observed. The
 engine behaviours it relies on were checked by reading the decomp (the most important ones are listed above), but real
 execution can still differ. In rough order of how likely they are to need attention:
 
-1. **Song recognition in practice**: the staff semantics (`pos` / `buttonIndex` / `state`), timing with quick note sequences.
-2. **The warp**: the `EnTest7` destination override, the arrival at the Sanctuary, the exact-return data.
-3. **Scene loading**: table registration timing, the dummy DMA range, collision memory, the room object list.
-4. **Rendering**: textures, vertex-colour lighting and fog against the game's render state; any z-fighting; actor model orientation.
-5. **Actors**: collider sizes, enemy and boss behaviour and balance, hit detection of bramble / shield / spikes.
-6. Things deliberately left out: custom music, dialogue text, a title card, a minimap, a pause-menu entry for the song.
+1. **That the game now loads the mod at all.** 0.1.1 removes the most likely cause of the 0.1.0 load failure (see above) but has
+   not been run in the game either.
+2. **Song recognition in practice**: the staff semantics (`pos` / `buttonIndex` / `state`), timing with quick note sequences. The
+   song is now polled after `Play_Update` instead of just before `Message_Update`, which only moves the check by a fraction of a frame.
+3. **The warp**: the destination override in `Lil_RedirectOwlWarp` (it relies on the next-frame read of `nextEntrance` described
+   above), the arrival at the Sanctuary, the exact-return data.
+4. **Scene loading**: table registration timing, the dummy DMA range, collision memory, the room object list.
+5. **Rendering**: textures, vertex-colour lighting and fog against the game's render state; any z-fighting; actor model orientation.
+6. **Actors**: collider sizes, enemy and boss behaviour and balance, hit detection of bramble / shield / spikes.
+7. Things deliberately left out: custom music, dialogue text, a title card, a minimap, a pause-menu entry for the song.
 
-If something misbehaves, the useful places to look are `Lil_OnMessageUpdate` (song), `Lil_AfterWarpCsWarp` (warp),
+If something misbehaves, the useful places to look are `Lil_PollOcarina` (song), `Lil_RedirectOwlWarp` (warp),
 `Lil_RegisterTables` / `scene_loader.c` (loading), and the `sCylinderInit` / state machine of the actor in question. Most
 tunables (health, speeds, timers, ranges) are constants at the top of each actor.

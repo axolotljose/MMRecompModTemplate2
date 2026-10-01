@@ -14,12 +14,18 @@
  * one of three things happens:
  *   1. An actor nearby wants the song (for example the gate statue, or a puzzle): it consumes the song.
  *   2. We are outside our scenes: a *real* Song of Soaring warp is started (the feather / wind capsule cutscene, played by
- *      the vanilla EnTest7 actor). When that cutscene is about to load the destination we swap the destination for the
- *      White Rose Sanctuary.
+ *      the vanilla EnTest7 actor). EnTest7 picks the destination during the actor update and the game only reads it at the
+ *      start of the next frame, so once it has chosen we swap the destination for the White Rose Sanctuary.
  *   3. We are inside our scenes: the vanilla "warp back to the entrance" path is used (the same one the game uses when you
  *      play the Song of Soaring inside a dungeon) with the respawn data replaced by the exact spot the player left from.
  *
- * Nothing is patched (only hooked), so this coexists with other mods.
+ * Nothing is patched, so this coexists with other mods.
+ *
+ * Why there are almost no hooks: every game function a mod hooks has to be regenerated from the ROM when the mod is loaded, and
+ * if one of them cannot be regenerated the whole mod fails to load ("code mod loading internal error", with no mod id). The only
+ * game functions this mod hooks are Play_InitScene and Room_RequestNewRoom (scene_loader.c), the same two the Scene API mod
+ * hooks. Everything else runs from events the game raises itself (recomp_on_play_init, recomp_after_play_update and the
+ * autosave events), which cost nothing at load time. tools/inspect_nrm.py lists what a built mod asks the game to regenerate.
  */
 
 #include "lil_actor.h"
@@ -29,7 +35,7 @@
 
 typedef enum LilWarpKind {
     LIL_WARP_NONE,
-    LIL_WARP_TO_SANCTUARY, // destination is overridden in EnTest7_WarpCsWarp
+    LIL_WARP_TO_SANCTUARY, // destination is overridden once EnTest7 has picked one (Lil_RedirectOwlWarp)
     LIL_WARP_HOME,         // vanilla OCARINA_MODE_WARP_TO_ENTRANCE, using the saved origin
     LIL_WARP_HOME_FALLBACK // origin unknown: vanilla Clock Town owl statue destination
 } LilWarpKind;
@@ -50,8 +56,6 @@ static u8 sLilOriginValid;
 
 static u16 sLilSavedEntranceForAutosave;
 static u8 sLilAutosaveAdjusted;
-
-static PlayState* sLilPlayForWarpHook;
 
 u8 gLilWarpBlocked;
 
@@ -141,7 +145,7 @@ static void Lil_StartWarpToSanctuary(PlayState* play) {
     sLilOriginValid = true;
 
     sLilWarpKind = LIL_WARP_TO_SANCTUARY;
-    // Any of the owl warp modes works, the destination is swapped for ours in EnTest7_WarpCsWarp.
+    // Any of the owl warp modes works, the destination is swapped for ours in Lil_RedirectOwlWarp.
     Lil_CloseOcarina(play, OCARINA_MODE_WARP_TO_SOUTH_CLOCK_TOWN);
 }
 
@@ -214,9 +218,11 @@ static void Lil_OnMelodyPlayed(PlayState* play) {
 }
 
 /* ------------------------------------------------------------------------------------------------------------------
- * Hooks
+ * Per-frame work (events raised by the game itself, nothing is hooked)
  * ---------------------------------------------------------------------------------------------------------------- */
-RECOMP_HOOK("Message_Update") void Lil_OnMessageUpdate(PlayState* play) {
+
+// Watches the notes of a free-play ocarina session for our melody.
+static void Lil_PollOcarina(PlayState* play) {
     MessageContext* msgCtx = &play->msgCtx;
     OcarinaStaff* staff;
 
@@ -232,19 +238,35 @@ RECOMP_HOOK("Message_Update") void Lil_OnMessageUpdate(PlayState* play) {
     }
 }
 
-RECOMP_HOOK("EnTest7_WarpCsWarp") void Lil_OnWarpCsWarp(Actor* thisx, PlayState* play) {
-    sLilPlayForWarpHook = play;
-}
+// The vanilla owl warp cutscene (EnTest7) picks the destination from a table by ocarina mode and starts the fade in a single
+// call during the actor update (EnTest7_WarpCsWarp). Play_UpdateMain only reads the destination at the start of the next
+// frame, so changing it here, right after Play_Update, is in time. Only the exact destination the vanilla code chose for the
+// mode we asked for is replaced, so no other transition can be redirected by mistake.
+static void Lil_RedirectOwlWarp(PlayState* play) {
+    s32 isVanillaDestination;
 
-// Runs after the vanilla code has picked the owl warp destination and started the transition.
-RECOMP_HOOK_RETURN("EnTest7_WarpCsWarp") void Lil_AfterWarpCsWarp(void) {
-    if ((sLilWarpKind == LIL_WARP_TO_SANCTUARY) && (sLilPlayForWarpHook != NULL)) {
-        sLilPlayForWarpHook->nextEntrance = LIL_ENTRANCE_SANCTUARY(LIL_SPAWN_SANCTUARY_WARP);
+    if ((sLilWarpKind != LIL_WARP_TO_SANCTUARY) || (play->transitionTrigger != TRANS_TRIGGER_START)) {
+        return;
+    }
+
+    isVanillaDestination =
+        (play->nextEntrance == ENTRANCE(SOUTH_CLOCK_TOWN, 9)) || // sOwlWarpEntrances[OWL_WARP_CLOCK_TOWN]
+        ((play->sceneId == SCENE_SECOM) && (play->nextEntrance == ENTRANCE(IKANA_CANYON, 6))); // vanilla special case in the Secret Shrine
+
+    if (isVanillaDestination) {
+        play->nextEntrance = LIL_ENTRANCE_SANCTUARY(LIL_SPAWN_SANCTUARY_WARP);
     }
 }
 
-// A new scene (Play state) is starting. Make sure our tables are in place before the game looks anything up.
-RECOMP_HOOK("Play_Init") void Lil_OnPlayInit(GameState* thisx) {
+// Raised by the game right after Play_Update, once per frame.
+RECOMP_CALLBACK("*", recomp_after_play_update) void Lil_AfterPlayUpdate(PlayState* play) {
+    Lil_PollOcarina(play);
+    Lil_RedirectOwlWarp(play);
+}
+
+// Raised by the game as the very first thing Play_Init does (a new scene is starting). Make sure our tables are in place before
+// the game looks anything up.
+RECOMP_CALLBACK("*", recomp_on_play_init) void Lil_OnPlayInit(PlayState* play) {
     Lil_RegisterTables();
     Lil_RegisterActors();
     Lil_ClearListeners();

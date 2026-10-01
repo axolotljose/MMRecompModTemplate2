@@ -16,7 +16,8 @@
 #   3. Builds RecompModTool from the N64Recomp commit of the official `mod-tool-release`.
 #   4. Runs `make` and `RecompModTool mod.toml build`.
 #
-# Environment overrides: LIL_TOOLCHAIN_DIR (default ./.toolchain), LIL_USE_SYSTEM_CLANG=1 (use clang/ld.lld from PATH).
+# Environment overrides: LIL_TOOLCHAIN_DIR (default ./.toolchain), LIL_USE_SYSTEM_CLANG=1 (use clang/ld.lld from PATH),
+# LIL_ALLOWED_HOOKS (comma separated game functions the mod may hook, see the end of this script).
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -158,4 +159,12 @@ say "Packaging the mod"
 
 mkdir -p "$REPO/dist"
 cp "$STAGE"/build/*.nrm "$REPO/dist/"
+
+# What will the game have to do to load this mod? Every hooked game function is regenerated from the ROM at load time and a hook
+# that cannot be regenerated stops the whole mod from loading, so the set of hooks is checked against an allowlist (the two
+# functions the Scene API mod hooks too). Override with LIL_ALLOWED_HOOKS="A,B" after testing a new hook in the game.
+ALLOWED_HOOKS="${LIL_ALLOWED_HOOKS:-Play_InitScene,Room_RequestNewRoom}"
+say "Checking what the game has to regenerate to load the mod"
+python3 "$REPO/tools/inspect_nrm.py" "$(ls "$REPO"/dist/*.nrm | head -n 1)" "$SYMS/mm.us.rev1.syms.toml" --allow-hooks "$ALLOWED_HOOKS"
+
 say "Done: $(ls "$REPO"/dist/*.nrm)"
