@@ -104,6 +104,20 @@ that anyway (`package/elf_match` compares the packaged image against the elf the
 
 The artifact is `build/mm_recomp_glacio_village.nrm`.
 
+## Download the built mod
+
+The loadable `.nrm` files are committed in the repository and published on the release page, which carries the
+direct links and checksums: <https://github.com/axolotljose/MMRecompModTemplate2/releases/tag/glacio-village-v1.0.2>
+
+* `release/mm_recomp_glacio_village.nrm` — the mod.
+* `release/glacio_probe.nrm` — diagnostic build (same hook, no quest code), for telling a packaging problem apart
+  from a gameplay one when a device reports an error.
+
+`release/` is a copy of what `make mod` and `make probe` produce, kept in git only so a phone browser can fetch a
+`.nrm` without cloning or building; `build/` stays gitignored. GitHub's asset-upload host is not reachable from the
+environment these were built in, which is why they live in the tree and are linked from the release notes instead of
+being attached as release assets. Each has a `.sha256` next to it.
+
 ## Installing
 
 * **PC (Zelda64Recomp / N64Recomp):** drop the `.nrm` into the `mods` folder next to the executable,
