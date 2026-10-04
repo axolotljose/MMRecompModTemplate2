@@ -92,11 +92,16 @@ is `mod.json` + `mod_syms.bin` + `mod_binary.bin` (+ `thumb.png`). Android canno
 `.so`, and an offline-recompiled mod is per-platform by construction. Live recompilation is the
 portable path, and it is what `RecompModTool` produces when there is no patch table.
 
-**2. Hooks only, never `RECOMP_PATCH`.** The port ships 188 base-patched functions (`patches/*.c`,
-detected by the `RECOMP_PATCH` marker). Patching a function the base recomp already patches makes the
-mod fail to load, so a single `RECOMP_PATCH` is enough to make a mod unshippable for mobile users. The
-mod hooks `Player_Update` once and drives everything from that hook. Hooking a base-patched function
-is explicitly allowed and multiple mods may hook the same function, so this also stacks.
+**2. Hooks only, never `RECOMP_PATCH`, and only on functions in the base ROM.** The port ships 188
+base-patched functions (`patches/*.c`, detected by the `RECOMP_PATCH` marker). Patching a function the
+base recomp already patches makes the mod fail to load, so a single `RECOMP_PATCH` is enough to make a
+mod unshippable for mobile users. The mod hooks `Play_Update` once and drives everything from that hook,
+and *which* function it hooks is load-bearing: installing a hook makes the loader live-recompile the
+hooked function out of the decompressed base ROM, so the target has to live in `..code` or `..boot`.
+Hooking `Player_Update`, which sits in the `..ovl_player_actor` overlay, packages cleanly and is then
+refused at load time (see the field report below). Hooking is allowed on base-patched functions and
+several mods may hook the same function, so this still stacks; `compat/hook_section` is the audit rule
+that keeps the section constraint from regressing.
 
 **3. No float arithmetic anywhere.** `-target mips-freestanding` selects soft float, so any `+`,
 `/`, `(int)` or `(float)` on a float becomes a call to `__addsf3`, `__fixsfsi`, `__floatsisf`,
