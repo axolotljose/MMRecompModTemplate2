@@ -1,5 +1,8 @@
 # Instructions the live recompiler can actually generate, extracted from the N64Recomp source tree that
-# the Android port pins (LiveRecomp @ c1a6dc93bfa5977de0ea256562058be4f1b73353, 2025-07-19).
+# the Android port pins (N64Recomp @ 68e2a69b35a0c26eb76d0e9b0b0c30a5a0f1e2a1, the runtime submodule of
+# Zelda64Recomp-Android 0.6.10, via librecomp @ 9d92c394b543ccc3f8d939fe8c89614ca13a9416). The list is
+# byte-identical to the one from c1a6dc93bfa5977de0ea256562058be4f1b73353, which the previous release
+# was checked against, so no instruction gained or lost support between those two runtime bumps.
 # Regenerate with:
 #   git -C <N64Recomp> show <pinned-commit>:src/operations.cpp > /tmp/operations.cpp
 #   git -C <N64Recomp> show <pinned-commit>:src/recompilation.cpp > /tmp/recompilation.cpp

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import hashlib
 import pathlib
 import re
 import struct
@@ -121,10 +122,37 @@ def load_reference_index(toml_path: pathlib.Path):
     return by_vram, by_name
 
 
+def load_reference_sections(toml_path: pathlib.Path):
+    """({rom: section name}, {base section roms}) from a [[section]] symbol file.
+
+    "Base" means "not an overlay": the loader installs a hook by live-recompiling the *hooked*
+    function out of the decompressed base ROM image, and overlay (`..ovl_*`) sections are not part of
+    that image - they are decompressed per scene at runtime. A hook whose record points at an overlay
+    function therefore fails to install, and the port reports it as a nameless
+    `Failed to load mod code (Code mod loading internal error)`, because the failure comes from
+    `apply_regenlist(decompressed_rom)` in src/mods.cpp, which builds that error without a mod name.
+    Every .nrm known to load on the Android port hooks a function in `..code` or `..boot`.
+    """
+    by_rom = {}
+    base = set()
+    if not toml_path.is_file():
+        return by_rom, base
+    text = toml_path.read_text(errors="replace")
+    pattern = re.compile(r'\[\[section\]\]\s*\nname = "([^"]*)"\s*\nrom = (0x[0-9A-Fa-f]+)'
+                         r'\s*\nvram = (0x[0-9A-Fa-f]+)\s*\nsize = (0x[0-9A-Fa-f]+)')
+    for name, rom, _vram, _size in pattern.findall(text):
+        rom_value = int(rom, 16)
+        by_rom[rom_value] = name
+        if not name.startswith("..ovl"):
+            base.add(rom_value)
+    return by_rom, base
+
+
 def load_base_patched_names(patches_dir: pathlib.Path):
     """Names the target port replaces in the base game itself (RECOMP_PATCH in its patch sources).
 
-    A mod may hook those functions but must not patch them, or it fails to load.
+    A mod must not patch those functions. Hooking them is allowed by the tooling, but a hook also has
+    to target a function in the base ROM image, which is checked separately (compat/hook_section).
     """
     names = set()
     if not patches_dir.is_dir():
@@ -243,7 +271,8 @@ def check_manifest(manifest: dict, report: Report, config: dict | None, sources:
 
 
 def check_package(names, syms, binary, report: Report, config: dict | None,
-                  reference_by_vram: dict, base_patched: set, toml_path=None):
+                  reference_by_vram: dict, base_patched: set, toml_path=None, ref_sections=None,
+                  sibling_binaries=None):
     if "mod.json" not in names:
         report.fail("package/mod.json", "no manifest in the archive: the loader ignores this .nrm")
     else:
@@ -414,8 +443,21 @@ def check_package(names, syms, binary, report: Report, config: dict | None,
     else:
         report.ok("binary/baked_addresses", "no unrelocated absolute game addresses baked into the image")
 
+    # A stale or overwritten build artifact is easy to ship by accident - two "different" mods whose
+    # payloads are the same byte string, so a diagnostic mod silently tests the real one instead.
+    if sibling_binaries and binary:
+        digest = hashlib.sha256(binary).hexdigest()
+        same = [other for other, other_digest in sibling_binaries.items() if other_digest == digest]
+        if same:
+            report.warn("package/duplicate_payload",
+                        "this package's mod_binary.bin is byte-identical to " + ", ".join(sorted(same)) +
+                        "; if that was not intended, the build reused a stale image (check that each "
+                        "variant really rebuilt, e.g. PROBE=1 writes to build-probe/)")
+
     # Imports must exist on the platform the mod claims to support.
-    dependencies = [name_of(syms["strings"], dep_start, dep_size) for dep_start, dep_size in syms["dependencies"]]
+    # parse_syms keeps the 4 reserved bytes in front of a dependency record so a reserialise can be
+    # byte exact, so the name's (start, size) is the *last* two fields of each entry here.
+    dependencies = [name_of(syms["strings"], dep[-2], dep[-1]) for dep in syms["dependencies"]]
     unknown = []
     for start, size, dep_index in syms["imports"]:
         import_name = name_of(syms["strings"], start, size)
@@ -442,6 +484,15 @@ def check_package(names, syms, binary, report: Report, config: dict | None,
                 break
         if elf_ref:
             elf_file = (toml_path.parent / elf_ref)
+            if not elf_file.is_file() and nrm_path:
+                # Variants build into their own directory (PROBE=1 -> build-probe/), so a manifest
+                # that was not adjusted for the variant still gets compared against the right elf.
+                alt = pathlib.Path(nrm_path).parent / pathlib.Path(elf_ref).name
+                if alt.is_file():
+                    elf_ref = str(alt)
+                    elf_file = alt
+                    report.info("package/elf_path",
+                                f"{toml_path.name} points at a missing elf; compared against {alt} instead")
             if not elf_file.is_file():
                 report.warn("package/elf_path", f"mod.toml points at {elf_ref} which does not exist")
             else:
@@ -492,6 +543,35 @@ def check_package(names, syms, binary, report: Report, config: dict | None,
     if syms["hooks"]:
         hook_names = [reference_by_vram.get(vram, f"0x{vram:08x}") for _f, _s, vram, _fl in syms["hooks"]]
         report.info("compat/hooks", f"{len(hook_names)} hook(s) on: " + ", ".join(hook_names))
+
+    # A hook record's second field is the rom address of the game section holding the hooked
+    # function; only base-ROM sections can be hooked (see load_reference_sections). This is the most
+    # expensive failure a mod can have on the Android port: nothing loads, and the dialog does not
+    # even name the mod, so an audit rule is worth more here than a paragraph of documentation.
+    if syms["hooks"]:
+        if ref_sections and ref_sections[1]:
+            by_rom, base = ref_sections
+            bad = []
+            for _func, section_rom, vram, _flags in syms["hooks"]:
+                if section_rom not in base:
+                    where = by_rom.get(section_rom, f"section rom 0x{section_rom:08x}")
+                    bad.append(f"{reference_by_vram.get(vram, '0x%08x' % vram)} (in {where})")
+            if bad:
+                report.fail("compat/hook_section",
+                            "hook target(s) outside the base ROM image: " + ", ".join(bad) +
+                            ". Only functions in `..code`/`..boot` can be hooked: hooking a function in "
+                            "an overlay makes the loader fail to recompile it and the mod refuses to "
+                            "load. Hook an outer per-frame function instead (Play_Update, "
+                            "GameState_Update) and iterate over the actors you care about yourself.")
+            else:
+                where = sorted({by_rom.get(rec[1], f"0x{rec[1]:08x}") for rec in syms["hooks"]})
+                report.ok("compat/hook_section",
+                          f"{len(syms['hooks'])} hook(s), all on functions in the base ROM "
+                          f"({', '.join(where)})")
+        else:
+            report.warn("compat/hook_section",
+                        f"{len(syms['hooks'])} hook(s) present but no reference symbol file was given, "
+                        "so their sections could not be checked (pass --reference-syms)")
 
     if syms["exports"]:
         export_names = [name_of(syms["strings"], start, size) for _func, start, size in syms["exports"]]
@@ -549,6 +629,21 @@ def main():
     if not reference_by_vram and nrm_path:
         reference_by_vram, _ = load_reference_index(pathlib.Path(args.reference_syms))
     base_patched = load_base_patched_names(pathlib.Path(args.patches)) if args.patches else set()
+    sibling_binaries = {}
+    if nrm_path:
+        try:
+            import zipfile as _zip
+            for other in sorted(pathlib.Path(nrm_path).parent.glob("*.nrm")):
+                if other == pathlib.Path(nrm_path) or not _zip.is_zipfile(other):
+                    continue
+                with _zip.ZipFile(other) as zf:
+                    if "mod_binary.bin" in zf.namelist():
+                        sibling_binaries[other.name] = hashlib.sha256(zf.read("mod_binary.bin")).hexdigest()
+        except OSError:
+            sibling_binaries = {}
+    ref_sections = load_reference_sections(pathlib.Path(args.reference_syms))
+    if not ref_sections[0]:
+        ref_sections = load_reference_sections(root / args.reference_syms)
 
     manifest = None
     if nrm_path and nrm_path.is_file():
@@ -592,7 +687,8 @@ def main():
 
     if nrm_path and nrm_path.is_file():
         _manifest, syms, binary, names = load_nrm(nrm_path)
-        check_package(names, syms, binary, report, config, reference_by_vram, base_patched, toml_path)
+        check_package(names, syms, binary, report, config, reference_by_vram, base_patched, toml_path,
+                      ref_sections=ref_sections, sibling_binaries=sibling_binaries)
     else:
         report.info("package", "no .nrm given: only the mod.toml manifest was audited")
 

@@ -43,13 +43,18 @@ spawned per session, and disabling the quest in the config leaves the game compl
 
 The point of this build is that it also runs on
 [Zelda64Recomp-Android](https://github.com/linkzenic/Zelda64Recomp-Android), where a lot of PC mods
-fail. That imposes four rules, and `tools/check_mod.py` proves all four hold on the packaged `.nrm`:
+fail. That imposes five rules, and `tools/check_mod.py` proves all five hold on the packaged `.nrm`:
 
 * **Pure `.nrm`, no `native_libraries`.** The Android loader cannot load a desktop `.so`/`.dll`, so
   the mod ships as MIPS code the runtime live-recompiles.
 * **No `RECOMP_PATCH`.** The port patches 188 base functions itself; a mod that replaces one of
-  those functions fails to load. This mod hooks `Player_Update` and nothing else, so it stacks with
+  those functions fails to load. This mod hooks `Play_Update` and nothing else, so it stacks with
   the port's patches and with other mods.
+* **Hooks only on base-ROM functions.** Installing a hook makes the loader live-recompile the *hooked*
+  function out of the decompressed base ROM, so a hook can only target a function in `..code` or
+  `..boot`. Hooking a function that lives in an overlay (`..ovl_player_actor`, ...) is accepted by the
+  packaging tool and then fails to load, with a dialog that does not even name the mod. This mod used
+  to do exactly that; see the field report in `docs/GLACIO_VILLAGE.md`.
 * **No float arithmetic.** The base game does not export libgcc's `__addsf3`/`__fixsfsi`/..., so one
   stray float op means the mod never loads. `include/glacio_float.h` does the IEEE-754 work with
   integers instead, and `make test` checks those helpers against real float arithmetic (~850k cases)
@@ -83,17 +88,22 @@ make
 make TOOLCHAIN=zig ZIG=zig
 ```
 
-Then package and audit. `RecompModTool` comes from the [N64Recomp](https://github.com/N64Recomp/N64Recomp)
-releases, or build it yourself from the `mod-tool-release` tag:
+Then package and audit. Packaging needs no external binary: with `TOOLCHAIN=zig` the linker records how
+every relocation was resolved and `tools/mm_nrm_pack.py` writes the `.nrm` from it (format and rules in
+`docs/MOD_FORMAT.md`). Upstream's `RecompModTool` (a [N64Recomp](https://github.com/N64Recomp/N64Recomp)
+release asset, or built from the `mod-tool-release` tag) is still supported and is used automatically for
+any other toolchain; `make test` round-trips every real `.nrm` in `release/` through the internal
+packager, byte for byte, which is what makes it trustworthy.
 
 ```sh
-make mod MOD_TOOL=/path/to/RecompModTool      # build + package + audit
-make nrm MOD_TOOL=/path/to/RecompModTool      # build + package
+make TOOLCHAIN=zig ZIG=zig mod                # build + package + audit (warnings are errors)
+make TOOLCHAIN=zig ZIG=zig nrm                # build + package
+make mod USE_MOD_TOOL=1 MOD_TOOL=/path/to/RecompModTool   # ...or package with the upstream tool
 make check                                    # audit build/mm_recomp_glacio_village.nrm
-make test                                     # float helpers + libgcc check
+make test                                     # float helpers, loadability, packager round-trip
 make DEMO=1 all                               # build the template's example mod instead (into build-demo/)
 make PROBE=1 probe                            # diagnostic build: hook only, no quest code (build-probe/)
-make live                                             # check the packaged image against the live recompiler's rules
+make live                                     # check the packaged image against the live recompiler's rules
 ```
 
 `make check`, `nrm` and `mod` cross-check against the mobile port automatically when it is checked
@@ -107,11 +117,13 @@ The artifact is `build/mm_recomp_glacio_village.nrm`.
 ## Download the built mod
 
 The loadable `.nrm` files are committed in the repository and published on the release page, which carries the
-direct links and checksums: <https://github.com/axolotljose/MMRecompModTemplate2/releases/tag/glacio-village-v1.0.2>
+direct links and checksums: <https://github.com/axolotljose/MMRecompModTemplate2/releases/tag/glacio-village-v1.0.3>
 
 * `release/mm_recomp_glacio_village.nrm` — the mod.
 * `release/glacio_probe.nrm` — diagnostic build (same hook, no quest code), for telling a packaging problem apart
-  from a gameplay one when a device reports an error.
+  from a gameplay one when a device reports an error. It is built from `build-probe/mod.elf`; the v1.0.2 copy
+  of it was packaged from the main build's elf by mistake and so proved nothing, which `probe.toml` and
+  `package/duplicate_payload` in the audit now prevent.
 
 `release/` is a copy of what `make mod` and `make probe` produce, kept in git only so a phone browser can fetch a
 `.nrm` without cloning or building; `build/` stays gitignored. GitHub's asset-upload host is not reachable from the

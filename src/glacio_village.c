@@ -17,6 +17,9 @@
  *
  * Why the mod is written this way (Android / cross-platform stability):
  *   - Only RECOMP_HOOK is used, never RECOMP_PATCH or RECOMP_FORCE_PATCH. Hooking cannot conflict
+ *   - Hooks target functions in the game's `..code` section, never an actor overlay: the Android port
+ *     live-recompiles the *hooked* function to install the hook, and only `..code` is available to it.
+ *     See the comment at Glacio_OnPlayUpdate for the full failure mode.
  *     with the base recompilation's own patches (the mobile port patches a number of functions,
  *     and patching one of those from a mod makes the mod fail to load) and it composes with other
  *     mods that hook the same function.
@@ -353,18 +356,18 @@ GLACIO_NOINLINE static void Glacio_PlaceWaygates(PlayState* play, s32 sceneId) {
 #ifdef GLACIO_PROBE
 /* Built with `make PROBE=1`. It installs the same hook and returns immediately after one log line,
  * so if this loads and the full mod does not, the problem is in the quest code, not the package. */
-RECOMP_HOOK("Player_Update")
-void Glacio_ProbeUpdate(Actor* playerActor, PlayState* play) {
+RECOMP_HOOK("Play_Update")
+void Glacio_ProbeUpdate(PlayState* play) {
     static s32 sLogged;
     if (sLogged) {
         return;
     }
     sLogged = 1;
-    if (playerActor != NULL && play != NULL) {
+    if (play != NULL) {
         recomp_printf("glacio probe: hook ran, scene 0x%02X day %d\n", (u32)play->sceneId,
                       (s32)(gSaveContext.save.day % 5));
     } else {
-        recomp_printf("glacio probe: hook ran with null arguments\n");
+        recomp_printf("glacio probe: hook ran with a null PlayState\n");
     }
 }
 #else
@@ -426,20 +429,43 @@ GLACIO_NOINLINE static void Glacio_UpdateDiana(PlayState* play) {
 /* ---------------------------------------------------------------- the hook -- */
 
 /**
- * The driving hook: Player_Update runs once per frame while Link is in the world. This mod
- * deliberately hooks it instead of replacing it, which keeps it compatible with the base
- * recompilation's own patch of the same function and with any other mod hooking it too.
+ * The driving hook: `Play_Update` runs once per frame while the player is in the world, and it is
+ * hooked rather than replaced, so any other mod hooking the same function still runs.
+ *
+ * WHY THIS FUNCTION AND NOT `Player_Update`. The obvious choice for per-frame player logic is
+ * `Player_Update`, and hooking it works on the desktop recomp. On the Android port it does not, and
+ * the failure is not in this mod's code: to install a hook the loader has to *recompile the hooked
+ * function itself* so it can jump into the hook list, and `apply_regenlist` builds that from the
+ * decompressed boot ROM. `Player_Update` lives in the `..ovl_player_actor` overlay (rom 0x00CA7F00),
+ * which is not there, so the recompile fails and the port reports
+ * `Failed to load mod code (Code mod loading internal error)` with an empty mod name -- that empty
+ * name is the tell, because those two `apply_regenlist` sites construct the error as
+ * `ModLoadErrorDetails{ "", ... }` rather than per-mod. `Play_Update` sits in `..code` (rom
+ * 0x00B3C000), and every hook that the port's own bundled mods install targets a function in that same
+ * section (dpad_builtin hooks `Interface_*`, ProxyMM hooks `Sram_*`), which is the property being
+ * relied on here. `tools/check_mod.py` now fails any hook or replacement outside it, so this cannot
+ * come back by accident. See docs/GLACIO_VILLAGE.md.
  */
 
-RECOMP_HOOK("Player_Update")
-void Glacio_OnPlayerUpdate(Actor* playerActor, PlayState* play) {
+RECOMP_HOOK("Play_Update")
+void Glacio_OnPlayUpdate(PlayState* play) {
     s32 sceneId;
     u16 resetCount;
     Actor* crystal;
+    Player* player;
 
-    if (play == NULL || playerActor == NULL) {
+    if (play == NULL) {
         return;
     }
+
+    // MM has no `play->player`; the player actor is the head of the ACTORCAT_PLAYER list. It is
+    // absent during some transitions, so it must be re-checked every frame rather than assumed.
+    player = GET_PLAYER(play);
+    if (player == NULL) {
+        return;
+    }
+    /* `player` is only needed for the null check above and for the crystal proximity test, which
+     * re-fetches the actor; keeping no alias avoids a stale pointer across a transition. */
 
     resetCount = gSaveContext.save.saveInfo.playerData.threeDayResetCount;
     if (resetCount != sGlacio.resetCount) {

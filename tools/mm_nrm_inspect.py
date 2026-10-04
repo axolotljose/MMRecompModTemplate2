@@ -95,9 +95,11 @@ def parse_syms(blob: bytes):
                                 "rom_size": rom_size, "bss_size": bss_size, "funcs": funcs,
                                 "relocs": relocs})
     for _ in range(num_dependencies):
-        r.u8()
-        r.raw(3)  # DependencyV1 has 3 bytes of padding after the reserved byte
-        out["dependencies"].append(struct.unpack("<2I", r.raw(8)))
+        # DependencyV1 is { bool reserved/padding (4 bytes), char* name (start, size) }, so the
+        # leading 4 bytes are kept verbatim: the writer needs them to reproduce a file byte for byte.
+        prefix = r.raw(4)
+        dep = struct.unpack("<2I", r.raw(8))
+        out["dependencies"].append((prefix, dep[0], dep[1]))
     for _ in range(num_imports):
         out["imports"].append(struct.unpack("<3I", r.raw(12)))
     for _ in range(num_dependency_events):

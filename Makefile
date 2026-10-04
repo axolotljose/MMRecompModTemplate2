@@ -104,6 +104,22 @@ LINK_IMAGE_OFFSET ?= 0x1000
 MOD_TOOL ?= RecompModTool
 MOD_TOML ?= mod.toml
 
+# Packaging is normally done by the upstream RecompModTool, which ships only as a GitHub *release
+# asset*. Those assets are not always downloadable (offline builds, restricted networks, CI), and
+# being unable to fetch a binary is a poor reason not to build a mod, so the template can also pack
+# with tools/mm_nrm_pack.py: it consumes the records the zig linker writes with --pack-json, i.e. no
+# extra inputs, and `make test` proves it by round-tripping every real .nrm in release/ byte for byte
+# (see docs/MOD_FORMAT.md). The internal packager needs the reference symbol maps, so when those or
+# the zig linker are unavailable the tool is used again; USE_MOD_TOOL=1 forces it.
+USE_MOD_TOOL ?= 0
+REFERENCE_DATASYMS ?= Zelda64RecompSyms/mm.us.rev1.datasyms.toml
+MOD_JSON := $(BUILD_DIR)/mod.json
+PACK_JSON := $(BUILD_DIR)/mod.pack.json
+THUMB ?= assets/thumb.png
+# Recursive (=), not :=, because NRM and MOD_TOML are resolved further down this file.
+PACK_ARGS = --elf $(TARGET) --meta $(PACK_JSON) --mod-toml $(MOD_TOML) --out $(NRM) \
+	--dump-dir $(BUILD_DIR) $(if $(wildcard $(THUMB)),--extra thumb.png=$(THUMB),)
+
 # The .nrm is named after mod_filename in the toml, so derive it instead of hardcoding one name.
 MOD_FILENAME := $(shell sed -n 's/^[[:space:]]*mod_filename[[:space:]]*=[[:space:]]*"[^"]*".*/&/p' $(MOD_TOML) | head -n1 | sed 's/.*"\([^"]*\)".*/\1/')
 NRM := $(BUILD_DIR)/$(if $(MOD_FILENAME),$(MOD_FILENAME),mod).nrm
@@ -118,6 +134,17 @@ PORT_PATCHES ?= $(firstword $(wildcard ../Zelda64Recomp-Android/patches ../andro
 REFERENCE_SYMS ?= Zelda64RecompSyms/mm.us.rev1.syms.toml
 AUDIT_ARGS := $(if $(PORT_PATCHES),--patches $(PORT_PATCHES) --reference-syms $(REFERENCE_SYMS))
 
+# Which packager to use. The internal one needs the zig linker (it reads the reference maps to turn
+# the tool's own rules into packaging records) and the reference symbol file, so fall back to the
+# upstream binary when either is missing.
+ifeq ($(TOOLCHAIN),zig)
+ifeq ($(wildcard $(REFERENCE_SYMS)),)
+override USE_MOD_TOOL := 1
+endif
+else
+override USE_MOD_TOOL := 1
+endif
+
 # Fail with instructions instead of "No such file or directory", which tells you nothing.
 check-tool = @command -v $(1) >/dev/null 2>&1 || test -x $(1) || { \
     echo "error: $(1) not found."; \
@@ -126,23 +153,36 @@ check-tool = @command -v $(1) >/dev/null 2>&1 || test -x $(1) || { \
 
 all: $(TARGET)
 
-$(TARGET): $(ALL_OBJS) $(LDSCRIPT) | $(BUILD_DIR)
+# $(LINKER) as a prerequisite: the linker is part of the build, and relinking after editing it is how
+# packaging-record fixes (tools/mm_mips_link.py --pack-json) actually reach the .nrm.
+$(TARGET): $(ALL_OBJS) $(LDSCRIPT) $(if $(filter zig,$(TOOLCHAIN)),$(LINKER),) | $(BUILD_DIR)
 ifeq ($(TOOLCHAIN),zig)
-	python3 $(LINKER) $(ALL_OBJS) -o $@ --base $(LINK_BASE) --image-offset $(LINK_IMAGE_OFFSET)
+	python3 $(LINKER) $(ALL_OBJS) -o $@ --base $(LINK_BASE) --image-offset $(LINK_IMAGE_OFFSET) \
+	    $(if $(wildcard $(REFERENCE_SYMS)),--reference-syms $(REFERENCE_SYMS),) \
+	    $(if $(wildcard $(REFERENCE_DATASYMS)),--reference-datasyms $(REFERENCE_DATASYMS),) \
+	    $(if $(filter 0,$(USE_MOD_TOOL)),--pack-json $(PACK_JSON),)
 else
 	$(LD) $(ALL_OBJS) $(LDFLAGS) -o $@
 endif
 
 # Package the linked elf into a .nrm (the format the loaders on PC and Android understand).
 nrm: $(TARGET)
+ifeq ($(USE_MOD_TOOL),1)
 	$(call check-tool,$(MOD_TOOL))
 	$(MOD_TOOL) $(MOD_TOML) $(BUILD_DIR)
+else
+	python3 tools/mm_nrm_pack.py $(PACK_ARGS)
+endif
 	python3 tools/check_mod.py $(MOD_TOML) $(NRM) --src $(SRC_DIR) $(AUDIT_ARGS)
 
 # Build, package and audit. This is the target to run before shipping a mod.
 mod: $(TARGET)
+ifeq ($(USE_MOD_TOOL),1)
 	$(call check-tool,$(MOD_TOOL))
 	$(MOD_TOOL) $(MOD_TOML) $(BUILD_DIR)
+else
+	python3 tools/mm_nrm_pack.py $(PACK_ARGS)
+endif
 	python3 tools/check_mod.py $(MOD_TOML) $(NRM) --src $(SRC_DIR) $(AUDIT_ARGS) $(CHECK_EXTRA) --strict
 	$(MAKE) --no-print-directory live
 
@@ -156,6 +196,7 @@ live:
 # object must not reference any symbol the base game cannot resolve.
 test:
 	python3 tools/test_float_helpers.py
+	python3 tools/mm_nrm_pack.py --selftest $(wildcard release/*.nrm)
 
 # Build the diagnostic variant: build-probe/glacio_probe.nrm.
 probe:

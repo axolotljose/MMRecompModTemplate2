@@ -11,7 +11,7 @@
 id = "mm_recomp_glacio_village_probe"
 
 # Version of this mod.
-version = "1.0.0"
+version = "1.0.3"
 
 # The name that will show up for this mod in the mod menu.
 display_name = "Glacio Village (load probe)"
@@ -77,8 +77,13 @@ native_libraries = [
 # No config options: the probe only proves the hook installs and the package loads.
 [inputs]
 
-# Input elf file to generate a mod from.
-elf_path = "build/mod.elf"
+# Input elf file to generate a mod from. This MUST be build-probe/mod.elf, i.e. the image the
+# PROBE=1 build actually produced: `make probe` compiles src/ with -DGLACIO_PROBE into build-probe/,
+# so pointing here at build/mod.elf packages the full quest build under the probe's manifest. That
+# exact mistake is why the v1.0.2 "probe" was byte-identical to the main mod and failed identically,
+# which sent a whole diagnosis down the wrong path. tools/check_mod.py now warns on it
+# (package/elf_match) and on two packages sharing a payload (package/duplicate_payload).
+elf_path = "build-probe/mod.elf"
 
 # Output mod filename.
 mod_filename = "glacio_probe"

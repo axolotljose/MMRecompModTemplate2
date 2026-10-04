@@ -231,7 +231,7 @@ If a build still crashes on a device, bisect with the two artefacts this repo pr
   resolution. This is what catches a `Failed to recompile mod` before a person does. Calibrated against
   mods known to load on the port so it does not cry wolf: those use `lwc1`, `bc1t`, computed jumps and
   unregistered `jal` targets, and all of that is informational, not a failure.
-* `build-probe/glacio_probe.nrm` — installs the same `Player_Update` hook, logs one line, runs no quest
+* `build-probe/glacio_probe.nrm` — installs the same `Play_Update` hook, logs one line, runs no quest
   code. Probe crashes too  → packaging/loader problem, not the quest. Probe loads, mod crashes → the
   quest code; then narrow it with the config options (`enabled = No` should make the mod inert while
   still loading, which separates "loaded and hooked" from "the quest logic did something bad").
@@ -239,6 +239,60 @@ If a build still crashes on a device, bisect with the two artefacts this repo pr
   reason for every *reported* load failure, and a native `SIGSEGV` backtrace shows which function the
   fault was in. That output distinguishes the cases far faster than reasoning about them, so it is worth
   grabbing before re-testing.
+
+### Resolved in v1.0.3: a hook may only target a base-ROM function
+
+A device reported the dialog `Error loading mods:` / ``: Failed to load mod code (Code mod loading
+internal error)` with an *empty* mod name. The empty name is the whole clue: `src/mods.cpp` builds
+that particular error as `ModLoadErrorDetails{ "", ... }`, and the only places that happen are the two
+`apply_regenlist(decompressed_rom)` calls — the ones that recompile the *base* functions a mod hooks or
+replaces. So the failure was not in this mod's own code at all (v1.0.2's `-mcpu=mips2` fix had already
+made that recompile cleanly): it was in recompiling the function the mod hooked, `Player_Update`.
+
+`Player_Update` lives in `..ovl_player_actor`, an actor overlay. Overlays are not part of the base ROM
+image handed to `apply_regenlist`, so the recompile returned `!good()` and the whole mod was refused.
+Cross-checking every `.nrm` known to load on the port confirms the rule, and the rule is about the
+*section*, not about whether the port patches the function:
+
+| mod | hooks | section of the target |
+| --- | --- | --- |
+| dpad_builtin (bundled with the APK) | `Interface_*` | `..code` |
+| save_editor (bundled) | `Sram_*`, … | `..code`/`..boot` |
+| ProxyMM_KV | `Sram_MultiplayerFileEntry`, … | `..boot` |
+| yazmt corelib / global_objects / playermodelmanager | `Play_*`, `GameState_*`, … | `..code` |
+| **Glacio Village v1.0.2** | `Player_Update` | **`..ovl_player_actor`** ✗ |
+
+The fix: `RECOMP_HOOK("Play_Update")` (vram 0x80167DE4, size 0x128, in `..code` at rom 0x00B3C000),
+which runs once per frame with the `PlayState*`, plus a null check on `GET_PLAYER(play)` because the
+player actor is genuinely absent during some transitions and `play->actorCtx.actorLists` is the only
+reliable way to see that. `GameState_Update` (0x8017377C) is the fallback if a future runtime ever moves
+`Play_Update` out of reach. Everything that used to read the player in the hook now goes through
+`GET_PLAYER(play)` and the crystal proximity test re-fetches the actor instead of holding a pointer, so
+no alias survives a scene change.
+
+Two guards keep it from coming back: `compat/hook_section` in `tools/check_mod.py` fails any hook whose
+record points outside `..code`/`..boot` (run it against v1.0.2's package and it says exactly this), and
+the hook sites in the source carry the reasoning above.
+
+Packaging also changed here, for a reason unrelated to the crash: `RecompModTool` is distributed only as
+a GitHub *release asset*, and release assets are not always fetchable from a build environment, which
+left no way to build the mod at all. `tools/mm_nrm_pack.py` now does the job from records the Python
+linker emits, and it is validated by round-tripping every real package in `release/` (plus the port's
+bundled ones) through `parse → reserialise → compare bytes`; `make test` runs it. The same exercise
+found that the v1.0.2 "probe" had been packaged from `build/mod.elf` instead of `build-probe/mod.elf`
+because `probe.toml`'s `elf_path` still pointed at the main build — so the probe that "proved" the
+quest code was innocent was actually a copy of the main mod. `probe.toml` now points at its own build
+directory and `package/duplicate_payload` warns whenever two packages share a payload.
+
+Baseline used for all of this: APK 0.6.10 (2026-07-29) → `librecomp` @ 9d92c394 → N64Recomp @
+68e2a69b. `minimum_recomp_version = "1.2.2"` is kept, because v1.0.2 demonstrably got past the port's
+version gate on the device and failed only later, during code loading — the fork reports a 1.2.x
+runtime version even though the app is 0.6.10.
+
+**Not yet re-verified on a phone.** Everything checked here is static: the package parses, the symbol
+file matches the format of packages the loader accepts, all 1222 words of the image are inside the
+target's 177-entry op table, and no rule the port's own bundled mods follow is broken. The remaining
+unknown is whether the quest *plays* correctly on device, which only a run can answer.
 
 ## Reproducing the checks
 

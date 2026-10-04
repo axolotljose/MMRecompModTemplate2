@@ -31,6 +31,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
+import re
 import struct
 import sys
 from pathlib import Path
@@ -151,8 +153,56 @@ class OutSec:
         return self.addr + (self.bss_size if self.kind == SHT_NOBITS else self.size)
 
 
+def parse_reference_syms(path):
+    """Read a Zelda64RecompSyms *.syms.toml / *.datasyms.toml into {name: (section_rom, section_vram, vram)}.
+
+    Those files are the only description of where the base game's functions and variables live, which
+    is what a mod's reference relocations have to be resolved against (the same lookup RecompModTool
+    does through its recompiler context). Sections are matched by the function's own vram because the
+    files list each symbol's vram but only each section's rom/vram.
+    """
+    text = Path(path).read_text(errors="replace")
+    result = {}
+    sections = []
+    # Note the two files are not shaped the same way: *.syms.toml sections carry a rom address,
+    # *.datasyms.toml sections only a vram (and their symbols no size), so a missing rom becomes 0.
+    # That is safe because reference *variables* are patched by absolute address and never get a
+    # relocation record, while reference *functions* always come from *.syms.toml (see mm_nrm_pack).
+    cur = None
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line == "[[section]]":
+            cur = {"rom": None, "vram": None}
+            sections.append(cur)
+            continue
+        if cur is None:
+            continue
+        if line.startswith("rom"):
+            cur["rom"] = int(line.split("=", 1)[1].split("#")[0].strip(), 0)
+        elif line.startswith("vram"):
+            cur["vram"] = int(line.split("=", 1)[1].split("#")[0].strip(), 0)
+        elif line.startswith("{"):
+            m = re.search(r'name\s*=\s*"([^"]+)"', line)
+            v = re.search(r'vram\s*=\s*(0x[0-9A-Fa-f]+)', line)
+            if m and v:
+                sections[-1].setdefault("syms", []).append((m.group(1), int(v.group(1), 0)))
+    for sec in sections:
+        if sec["vram"] is None:
+            continue
+        for name, vram in sec.get("syms", []):
+            result.setdefault(name, (sec["rom"] or 0, sec["vram"], vram))
+    return result
+
+
 class Linker:
-    def __init__(self, object_paths, base=0, image_offset=0x1000, min_align=16, verify_code=True):
+    def __init__(self, object_paths, base=0, image_offset=0x1000, min_align=16, verify_code=True,
+                 reference_funcs=None, reference_data=None):
+        # name -> (section_rom, section_vram, vram) for base game functions and variables. A
+        # reference *function* keeps a relocation (the loader patches the call to the native
+        # implementation); a reference *variable* is patched here and gets no relocation, which is
+        # exactly what RecompModTool does for non-relocatable reference sections.
+        self.reference_funcs = reference_funcs or {}
+        self.reference_data = reference_data or {}
         self.base = base
         self.image_offset = image_offset
         self.verify_code = verify_code
@@ -364,12 +414,22 @@ class Linker:
         return idx
 
     def reloc_symbol_for(self, addr, defined, name, type_):
+        """Which symtab index a relocation record should name.
+
+        Relocs against the mod's own image name the section they landed in, exactly like `ld -r`
+        output, while relocs that point into the base game stay *undefined* by name: that is what
+        RecompModTool keys its reference resolution off, and an absolute address would be wrong as
+        soon as the loader moves the mod image.
+        """
         if not defined:
             return self.undefined_symbol(name, type_)
         for out in self.sections:
             if out.addr <= addr < out.end:
                 return self.section_symbols[id(out)]
-        raise SystemExit(f"error: relocation target address {addr:#x} lies outside the mod image")
+        if name in self.reference_funcs or name in self.reference_data:
+            return self.undefined_symbol(name, type_)
+        raise SystemExit(f"error: relocation at {addr:#x} against {name} lies outside the mod image "
+                         f"(a symbol the linker resolved but that is in no output section)")
 
     # -- relocation application --------------------------------------------------
     def relocate(self):
@@ -441,10 +501,33 @@ class Linker:
             """Return (defined, addr, name, type) for the entry's symbol."""
             return resolve(entry)
 
+        def reference(name):
+            """(kind, section_rom, section_vram, vram) if the name is a base game symbol."""
+            if name in self.reference_funcs:
+                rom, svram, vram = self.reference_funcs[name]
+                return "function", rom, svram, vram
+            if name in self.reference_data:
+                rom, svram, vram = self.reference_data[name]
+                return "data", rom, svram, vram
+            return None
+
         emitted = []  # (sort_key, order, reloc dict)
         for lo_addr, his, lo in pairs:
             target, name, defined, stype = resolve(lo)
             addend = lo["r"].addend
+            ref = None if defined else reference(name)
+            if ref is not None:
+                kind, ref_rom, ref_svram, ref_vram = ref
+                target, defined = ref_vram, True
+                if kind == "data":
+                    # Patched in place, no record: the base game's data keeps its original address.
+                    ref = ("data-patched", ref_rom, ref_svram, ref_vram)
+                else:
+                    ref = ("function", ref_rom, ref_svram, ref_vram)
+            elif not defined:
+                raise SystemExit(f"error: {name or 'unnamed'} is referenced by the mod but exists in "
+                                 f"neither the function nor the data reference symbols; a mod can only "
+                                 f"call base game symbols or RECOMP_IMPORTs")
             lo_word = struct.unpack_from(">I", out.data, lo_addr)[0]
             if his:
                 hi_addr = his[0]["addr"]
@@ -456,18 +539,28 @@ class Linker:
             full = (full + (target if defined else 0) + addend) & 0xFFFFFFFF
             hi_value = ((full + 0x8000) >> 16) & 0xFFFF
             lo_value = full & 0xFFFF
+            record = None
+            if ref is not None and ref[0] == "function":
+                record = {"kind": "reference", "ref_rom": ref[1], "ref_svram": ref[2]}
             for entry in his:
                 word = struct.unpack_from(">I", out.data, entry["addr"])[0]
                 struct.pack_into(">I", out.data, entry["addr"], (word & 0xFFFF0000) | hi_value)
-                emitted.append((lo_addr, 0, {"offset": out.addr + entry["addr"],
-                                             "symbol": self.reloc_symbol_for(full, defined, name, stype),
-                                             "type": R_MIPS_HI16}))
+                # Reference data pairs are patched above and intentionally left unrecorded, so a
+                # function reference is the only case that still needs a record here.
+                if record is not None or ref is None:
+                    rel = {"offset": out.addr + entry["addr"],
+                           "symbol": self.reloc_symbol_for(full, defined, name, stype),
+                           "type": R_MIPS_HI16, "value": full, "name": name}
+                    rel.update(record or {})
+                    emitted.append((lo_addr, 0, rel))
             word = struct.unpack_from(">I", out.data, lo_addr)[0]
             struct.pack_into(">I", out.data, lo_addr, (word & 0xFFFF0000) | lo_value)
-            if his:
-                emitted.append((lo_addr, 1, {"offset": out.addr + lo_addr,
-                                             "symbol": self.reloc_symbol_for(full, defined, name, stype),
-                                             "type": R_MIPS_LO16}))
+            if his and (record is not None or ref is None):
+                rel = {"offset": out.addr + lo_addr,
+                       "symbol": self.reloc_symbol_for(full, defined, name, stype),
+                       "type": R_MIPS_LO16, "value": full, "name": name}
+                rel.update(record or {})
+                emitted.append((lo_addr, 1, rel))
             else:
                 # Orphaned LO16: still record it so the loader can shift the value.
                 others.append(lo)
@@ -477,18 +570,47 @@ class Linker:
             addr = entry["addr"]
             target, name, defined, stype = resolve(entry)
             word = struct.unpack_from(">I", out.data, addr)[0] if addr + 4 <= len(out.data) else 0
-            value = (target if defined else 0) + r.addend
+            ref = None if defined else reference(name)
+            if ref is not None:
+                kind, ref_rom, ref_svram, ref_vram = ref
+                target, defined = ref_vram, True
+                value = target + r.addend
+            else:
+                ref_rom = ref_svram = 0
+                value = (target if defined else 0) + r.addend
+            if ref is not None and ref[0] == "data":
+                # Reference data: bake the address, emit no record (matches RecompModTool).
+                if r.type == R_MIPS_32:
+                    struct.pack_into(">I", out.data, addr, (word + value) & 0xFFFFFFFF)
+                elif r.type == R_MIPS_LO16:
+                    struct.pack_into(">I", out.data, addr, (word & 0xFFFF0000) | (value & 0xFFFF))
+                elif r.type == R_MIPS_HI16:
+                    struct.pack_into(">I", out.data, addr,
+                                     (word & 0xFFFF0000) | (((value + 0x8000) >> 16) & 0xFFFF))
+                else:
+                    fail(entry, f"cannot patch reference variable {name} with {RELOC_NAMES.get(r.type)}")
+                continue
 
             if r.type == R_MIPS_26:
                 struct.pack_into(">I", out.data, addr,
                                  (word & 0xFC000000) | (((value & 0x0FFFFFFF) >> 2) & 0x03FFFFFF))
-                out.relocs.append({"offset": out.addr + addr, "symbol": self.reloc_symbol_for(value, defined, name, stype),
-                                   "type": R_MIPS_26})
+                rel = {"offset": out.addr + addr, "symbol": self.reloc_symbol_for(value, defined, name, stype),
+                       "type": R_MIPS_26, "value": value, "name": name}
+                if ref is not None:
+                    rel["kind"] = "reference"
+                    rel["ref_rom"] = ref_rom
+                    rel["ref_svram"] = ref_svram
+                out.relocs.append(rel)
                 continue
             if r.type == R_MIPS_32:
                 struct.pack_into(">I", out.data, addr, (word + value) & 0xFFFFFFFF)
-                out.relocs.append({"offset": out.addr + addr, "symbol": self.reloc_symbol_for(value, defined, name, stype),
-                                   "type": R_MIPS_32})
+                rel = {"offset": out.addr + addr, "symbol": self.reloc_symbol_for(value, defined, name, stype),
+                       "type": R_MIPS_32, "value": value, "name": name}
+                if ref is not None:
+                    rel["kind"] = "reference"
+                    rel["ref_rom"] = ref_rom
+                    rel["ref_svram"] = ref_svram
+                out.relocs.append(rel)
                 continue
             if r.type == R_MIPS_16:
                 struct.pack_into(">H", out.data, addr, (word + value) & 0xFFFF)
@@ -499,7 +621,7 @@ class Linker:
                 struct.pack_into(">I", out.data, addr, (word & 0xFFFF0000) | (value & 0xFFFF))
                 out.relocs.append({"offset": out.addr + addr,
                                    "symbol": self.reloc_symbol_for(value, defined, name, stype),
-                                   "type": R_MIPS_LO16})
+                                   "type": R_MIPS_LO16, "value": value, "name": name})
                 continue
             if r.type == R_MIPS_HI16:
                 # Orphaned HI16: round the address up so the matching (unrelocated) low half
@@ -508,7 +630,7 @@ class Linker:
                 struct.pack_into(">I", out.data, addr, (word & 0xFFFF0000) | hi_value)
                 out.relocs.append({"offset": out.addr + addr,
                                    "symbol": self.reloc_symbol_for(value, defined, name, stype),
-                                   "type": R_MIPS_HI16})
+                                   "type": R_MIPS_HI1, "value": value, "name": name})
                 continue
             if r.type in (R_MIPS_PC16, R_MIPS_REL32):
                 if not defined:
@@ -558,6 +680,145 @@ class Linker:
                      "filesz": image_end, "memsz": image_end, "flags": SHF_WRITE | SHF_ALLOC | SHF_EXECINSTR,
                      "align": 0x10}]
         return ElfFile.write(E.ET_EXEC, E.EM_MIPS, 0, 0, specs, self.symbols, segments)
+
+    # -- mod symbol file records -------------------------------------------------------
+    def build_nrm_records(self):
+        """Produce everything the mod symbol file needs, in the shape tools/mm_nrm_pack.py writes.
+
+        The rules are a faithful port of RecompModTool's collection pass: input sections that share a
+        rom-to-ram delta merge into one output section; import sections contribute no functions or
+        relocations (their thunks are dummy code and imports are discovered from the call sites that
+        target them); each function in a .recomp_hook[.return].<name> section becomes a hook record
+        carrying the hooked base function's section rom and vram; relocations to the mod's own image
+        are recorded as (offset, type, offset-in-image) against the self section, while reference
+        functions are recorded against their game section so the loader can patch the call.
+        """
+        IMPORT_PREFIX = ".recomp_import."
+        HOOK_PREFIX = ".recomp_hook."
+        HOOK_RETURN_PREFIX = ".recomp_hook_return."
+        alloc = [out for out in self.sections if out.kind != SHT_NOBITS]
+        if not alloc:
+            raise SystemExit("error: linked image has no allocated sections")
+        image_base = min(out.addr for out in alloc)
+        image_end = max(out.addr + out.size for out in alloc)
+        rom_size = image_end - image_base
+        bss_end = image_end
+        for out in self.sections:
+            if out.kind == SHT_NOBITS and out.addr <= bss_end + 16:
+                bss_end = max(bss_end, out.addr + out.bss_size)
+        bss_size = bss_end - image_end
+
+        def is_import(out):
+            return out.name.startswith(IMPORT_PREFIX)
+
+        # Functions, in ascending image offset (the order the reference tool's output ends up in).
+        funcs = []
+        func_index_at = {}
+        for out in alloc:
+            if is_import(out):
+                continue
+            for chunk in out.chunks:
+                for sym in chunk.obj.symbols:
+                    if sym.shndx != chunk.sec_index or sym.type != STT_FUNC or sym.size == 0:
+                        continue
+                    addr = out.addr + chunk.offset + sym.value
+                    funcs.append((addr - image_base, sym.size, sym.name, out.name))
+        funcs.sort(key=lambda f: f[0])
+        for i, f in enumerate(funcs):
+            func_index_at[f[0]] = i
+        dupes = len(funcs) - len(func_index_at)
+        if dupes:
+            raise SystemExit(f"error: {dupes} duplicate function address(es) in the linked image")
+
+        # Import thunks: name -> the .recomp_import.<dep> section they live in.
+        import_addrs = {}
+        for out in alloc:
+            if not is_import(out):
+                continue
+            dep = out.name[len(IMPORT_PREFIX):]
+            for chunk in out.chunks:
+                for sym in chunk.obj.symbols:
+                    if sym.shndx != chunk.sec_index or sym.size == 0:
+                        continue
+                    import_addrs[out.addr + chunk.offset + sym.value] = (sym.name, dep)
+        # An import record is created per import *call site*, not per declared thunk. The mod API
+        # headers declare far more functions than any one mod uses, and every record the tool did not
+        # emit would oblige the loader to resolve an API symbol this mod never calls - which fails the
+        # whole mod on a runtime that does not export it. Collecting them from the call sites is what
+        # RecompModTool does, so a package built here and one built by the tool agree on this table.
+        imports = []  # (name, dep) in first-use order, matching the reloc indices below
+        import_index = {}
+        deps = []
+
+        relocs = []
+        for out in alloc:
+            if is_import(out):
+                continue
+            for rel in out.relocs:
+                if rel["type"] == R_MIPS_NONE:
+                    continue
+                offset = rel["offset"] - image_base
+                if "value" not in rel:
+                    raise SystemExit(f"error: internal: relocation record at {rel['offset']:#x} "
+                                     f"(type {rel['type']}) carries no resolved value")
+                target_addr = rel["value"]
+                if rel.get("kind") == "reference":
+                    relocs.append([offset, rel["type"], target_addr - rel["ref_svram"], rel["ref_rom"]])
+                    continue
+                thunk = import_addrs.get(target_addr)
+                if thunk is not None:
+                    name, dep = thunk
+                    idx = import_index.get(name)
+                    if idx is None:
+                        idx = len(imports)
+                        import_index[name] = idx
+                        imports.append((name, dep))
+                        if dep not in deps:
+                            deps.append(dep)
+                    relocs.append([offset, rel["type"], idx, 0xFFFFFFFE])
+                    continue
+                if not (image_base <= target_addr < image_end + bss_size):
+                    raise SystemExit(f"error: relocation at {rel['offset']:#x} targets {target_addr:#x}, "
+                                     f"outside the mod image; only the image, its bss, imports and "
+                                     f"reference symbols may be relocated")
+                relocs.append([offset, rel["type"], target_addr - image_base, 0x80000000])
+        relocs.sort(key=lambda r: (r[0], r[1]))
+        if not deps:
+            deps = ["*"]  # the base game is always a dependency of a code mod
+
+        hooks = []
+        for out in alloc:
+            if out.name.startswith(HOOK_RETURN_PREFIX):
+                hooked, flags = out.name[len(HOOK_RETURN_PREFIX):], 1
+            elif out.name.startswith(HOOK_PREFIX):
+                hooked, flags = out.name[len(HOOK_PREFIX):], 0
+            else:
+                continue
+            if hooked not in self.reference_funcs:
+                raise SystemExit(f"error: hook target {hooked} is not a function in the reference symbols")
+            rom, svram, vram = self.reference_funcs[hooked]
+            for chunk in out.chunks:
+                for sym in chunk.obj.symbols:
+                    if sym.shndx != chunk.sec_index or sym.type != STT_FUNC or sym.size == 0:
+                        continue
+                    foff = out.addr + chunk.offset + sym.value - image_base
+                    if foff not in func_index_at:
+                        raise SystemExit(f"error: hook function for {hooked} was not registered as a function")
+                    hooks.append([func_index_at[foff], rom, vram, flags])
+
+        return {
+            "image_base": image_base,
+            "image_file_offset": image_base - self.base,
+            "rom_size": rom_size,
+            "bss_size": bss_size,
+            "funcs": [[off, size] for off, size, _name, _sec in funcs],
+            "func_names": [name for _off, _size, name, _sec in funcs],
+            "func_sections": [sec for _off, _size, _name, sec in funcs],
+            "relocs": relocs,
+            "imports": [[name, dep] for name, dep in imports],
+            "deps": deps,
+            "hooks": hooks,
+        }
 
     def run(self):
         self.collect_sections()
@@ -667,6 +928,14 @@ def main():
                          "combined with the default --image-offset 0x1000 (space for the ELF headers) "
                          "the first section ends up at exactly 0x81000000. Use 0 only for a "
                          "self-describing dump, and 0x81000000 for a fixed-address offline build.")
+    ap.add_argument("--reference-syms", default="",
+                    help="base game function symbols (Zelda64RecompSyms mm.us.rev1.syms.toml); enables "
+                         "resolving calls to game functions, which the mod loader patches to natives")
+    ap.add_argument("--reference-datasyms", default="",
+                    help="base game data symbols (mm.us.rev1.datasyms.toml); references to these are "
+                         "patched to their fixed address and get no relocation record")
+    ap.add_argument("--pack-json", default="",
+                    help="write the mod symbol file records for tools/mm_nrm_pack.py to this path")
     ap.add_argument("--image-offset", default="0x1000", help="file offset of the image start")
     ap.add_argument("--dump", action="store_true", help="dump ELF(s) instead of linking")
     ap.add_argument("--no-verify", action="store_true", help="skip decoding the linked image to check it")
@@ -677,9 +946,15 @@ def main():
         return
     if not args.output:
         raise SystemExit("error: -o/--output is required")
+    ref_funcs = parse_reference_syms(args.reference_syms) if args.reference_syms else {}
+    ref_data = parse_reference_syms(args.reference_datasyms) if args.reference_datasyms else {}
+    if args.reference_syms and not ref_funcs:
+        raise SystemExit(f"error: no function symbols parsed from {args.reference_syms}")
     linker = Linker(args.objects, base=int(args.base, 0), image_offset=int(args.image_offset, 0),
-                    verify_code=not args.no_verify)
+                    verify_code=not args.no_verify, reference_funcs=ref_funcs, reference_data=ref_data)
     blob = linker.run()
+    if args.pack_json:
+        Path(args.pack_json).write_text(json.dumps(linker.build_nrm_records(), indent=1) + "\n")
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(blob)
