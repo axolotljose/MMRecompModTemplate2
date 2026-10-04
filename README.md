@@ -58,6 +58,10 @@ fail. That imposes four rules, and `tools/check_mod.py` proves all four hold on 
   symbol file lists, so an unlisted helper is code that exists but has no compiled body — the first call
   into it is a force close, not a load error. The linker emits one `STT_FUNC` symbol per function and
   the auditor checks the package's function indices stay in range.
+* **Only instructions the R4300i actually has.** The live recompiler implements the N64's MIPS III
+  instruction set; one MIPS32 Release 2 encoding (`mul`, `ext`, `ins`, `movn`, `movz`, `mfhc1`) fails the
+  whole mod with "Failed to recompile mod", so the build uses `-mcpu=mips2` and `make live` decodes the
+  packaged image and asserts no such encoding survives into it.
 * **Only symbols the loader can resolve.** Imports are limited to the base API, undefined symbols
   must exist in `Zelda64RecompSyms/mm.us.rev1.syms.toml`, no absolute game address may be baked into
   data, and every relocation must be a type the runtime applies. `minimum_recomp_version` is kept at
@@ -89,6 +93,7 @@ make check                                    # audit build/mm_recomp_glacio_vil
 make test                                     # float helpers + libgcc check
 make DEMO=1 all                               # build the template's example mod instead (into build-demo/)
 make PROBE=1 probe                            # diagnostic build: hook only, no quest code (build-probe/)
+make live                                             # check the packaged image against the live recompiler's rules
 ```
 
 `make check`, `nrm` and `mod` cross-check against the mobile port automatically when it is checked

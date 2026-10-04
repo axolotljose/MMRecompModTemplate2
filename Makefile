@@ -49,7 +49,15 @@ TARGET  := $(BUILD_DIR)/mod.elf
 LINKER  := tools/mm_mips_link.py
 
 LDSCRIPT := mod.ld
-ARCHFLAGS := $(TARGETFLAGS) -mips2 -mabi=32 -O2 -G0 -fno-pic -mno-abicalls -mno-odd-spreg -mno-check-zero-division \
+# -mcpu=mips2 is load-bearing, not decoration. The N64's R4300i is a MIPS III core and the live
+# recompiler implements exactly that instruction set: one unsupported encoding makes
+# src/recompilation.cpp print "Unhandled instruction: <name>" and fail the entire mod ("Failed to
+# recompile mod" in the in-game error dialog). Under zig the ISA option -mips2 does NOT constrain
+# instruction selection -- zig's driver also injects -mfp64, so clang freely emits Release 2 encodings
+# (mul, ext, ins) and 64-bit-FPR integer moves (mfhc1/mthc1), plus movn/movz from MIPS IV, none of
+# which the recompiler knows. -mcpu=mips2 sets the subtarget itself, which does disable them.
+# `make live` re-checks the packaged image against the target's op table so this can never regress.
+ARCHFLAGS := $(TARGETFLAGS) -mcpu=mips2 -mabi=32 -O2 -G0 -fno-pic -mno-abicalls -mno-odd-spreg -mno-check-zero-division \
              -fomit-frame-pointer -ffast-math -fno-unsafe-math-optimizations -fno-builtin-memset
 WARNFLAGS := -Wall -Wextra -Wno-incompatible-library-redeclaration -Wno-unused-parameter -Wno-unknown-pragmas -Wno-unused-variable \
               -Wno-missing-braces -Wno-unsupported-floating-point-opt -Wno-macro-redefined -Werror=section
@@ -136,6 +144,13 @@ mod: $(TARGET)
 	$(call check-tool,$(MOD_TOOL))
 	$(MOD_TOOL) $(MOD_TOML) $(BUILD_DIR)
 	python3 tools/check_mod.py $(MOD_TOML) $(NRM) --src $(SRC_DIR) $(AUDIT_ARGS) $(CHECK_EXTRA) --strict
+	$(MAKE) --no-print-directory live
+
+# Does the packaged image compile on the target? Mirrors the live recompiler's own rules (op-table
+# membership, relocation/instruction pairing, jump resolution) against mod_binary.bin, i.e. the exact
+# bytes the device feeds to sljit. Run this before blaming a device.
+live:
+	python3 tools/check_live_recomp.py $(NRM) $(if $(STRICT),--strict,)
 
 # Host-side checks that do not need a packaged mod: float helper accuracy and the rule that the
 # object must not reference any symbol the base game cannot resolve.
@@ -148,6 +163,7 @@ probe:
 
 check:
 	python3 tools/check_mod.py $(MOD_TOML) $(NRM) --src $(SRC_DIR) $(AUDIT_ARGS)
+	$(MAKE) --no-print-directory live
 
 $(BUILD_DIR) $(BUILD_DIRS):
 ifeq ($(OS),Windows_NT)
@@ -168,7 +184,7 @@ endif
 
 -include $(ALL_DEPS)
 
-.PHONY: clean all nrm mod check test probe
+.PHONY: clean all nrm mod live check test probe
 
 # Print target for debugging
 print-% : ; $(info $* is a $(flavor $*) variable set to [$($*)]) @true

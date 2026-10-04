@@ -134,7 +134,15 @@ all defined function symbols, and `check_mod.py` fails a package whose hook or r
 out-of-range function index and warns when one function covers most of the image (the shape that means
 "the compiler inlined everything and nothing else was registered").
 
-**5. Sections live in the mod region.** `mod.ld` puts the image at `RAMBASE = 0x81000000`, and every
+**5. Only instructions the R4300i has.** The N64 CPU is MIPS III, and the live recompiler implements
+exactly its instruction set, so any MIPS32 Release 2 encoding aborts the whole mod with
+`Failed to recompile mod` (see the field report). Under zig, `-mips2` does *not* constrain instruction
+selection and the driver additionally injects `-mfp64`, which is why the build uses `-mcpu=mips2`:
+without it clang freely emits `mul`, `ext`/`ins`, `seb`/`seh`, `movn`/`movz` and `mfhc1`/`mthc1`
+integer-through-FPR moves. `make live` decodes the packaged image and fails on any of them, so the
+flag can never silently regress.
+
+**6. Sections live in the mod region.** `mod.ld` puts the image at `RAMBASE = 0x81000000`, and every
 `.nrm` that is known to load — including the ones bundled with the Android port — has its first section
 at exactly `0x81000000`. The Zig path links with `--base 0x80FFF000 --image-offset 0x1000` to land on
 the same address, and `check_mod.py` fails any package whose sections fall outside
@@ -203,7 +211,12 @@ things were wrong, and neither is visible from a PC-only workflow or from `Recom
    image but absent from the symbol file's function table, so they were never live recompiled. The
    package loaded; the first frame that called a helper faulted. Fixed by emitting a `STT_FUNC` symbol
    for every defined function in `tools/mm_mips_link.py`.
-2. **A wrong link base** introduced in the same revision (sections at `0x1000` instead of
+2. **MIPS32 Release 2 encodings** (the second build's `Failed to recompile mod` dialog): the image
+   contained 65 instructions the target's op table does not implement — `mfhc1`, `movn`, `movz`, `mul`,
+   `ext`, `ins` — because `-mips2` never constrained clang's instruction selection. `src/recompilation.cpp`
+   prints `Unhandled instruction: <name>` and returns false for the entire mod, which is the dialog that
+   was reported. Fixed by `-mcpu=mips2` and gated by `tools/check_live_recomp.py`.
+3. **A wrong link base** introduced in the same revision (sections at `0x1000` instead of
    `0x81000000`), found by parsing the `.nrm` files that ship with the port and comparing field for
    field. Fixed and now enforced by the auditor.
 
@@ -213,6 +226,11 @@ known to load on the target, field by field — `python3 tools/mm_nrm_inspect.py
 
 If a build still crashes on a device, bisect with the two artefacts this repo produces:
 
+* `make TOOLCHAIN=zig live` — decodes `mod_binary.bin` (the exact bytes the device feeds to sljit) and
+  applies the recompiler's own three rules: op-table membership, relocation/instruction pairing and jump
+  resolution. This is what catches a `Failed to recompile mod` before a person does. Calibrated against
+  mods known to load on the port so it does not cry wolf: those use `lwc1`, `bc1t`, computed jumps and
+  unregistered `jal` targets, and all of that is informational, not a failure.
 * `build-probe/glacio_probe.nrm` — installs the same `Player_Update` hook, logs one line, runs no quest
   code. Probe crashes too  → packaging/loader problem, not the quest. Probe loads, mod crashes → the
   quest code; then narrow it with the config options (`enabled = No` should make the mod inert while
@@ -227,6 +245,7 @@ If a build still crashes on a device, bisect with the two artefacts this repo pr
 ```sh
 make TOOLCHAIN=zig test                 # helpers + libgcc/libcall scan
 make TOOLCHAIN=zig probe                # build-probe/glacio_probe.nrm: hook only, one log line
+make TOOLCHAIN=zig live                 # does the packaged image satisfy the live recompiler's rules?
 make TOOLCHAIN=zig mod MOD_TOOL=$HOME/tools/RecompModTool
 python3 tools/check_mod.py mod.toml build/mm_recomp_glacio_village.nrm \
     --patches ../Zelda64Recomp-Android/patches \
