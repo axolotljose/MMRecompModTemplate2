@@ -138,7 +138,8 @@ def load_base_patched_names(patches_dir: pathlib.Path):
     return names
 
 
-def check_manifest(manifest: dict, report: Report, config: dict | None, sources: list[pathlib.Path]):
+def check_manifest(manifest: dict, report: Report, config: dict | None, sources: list[pathlib.Path],
+                   skip_config_source: bool = False):
     required = ["id", "version", "display_name", "description", "short_description", "authors",
                 "game_id", "minimum_recomp_version"]
     missing = [key for key in required if key not in manifest]
@@ -218,7 +219,7 @@ def check_manifest(manifest: dict, report: Report, config: dict | None, sources:
     if options:
         report.ok("config/options", f"{len(options)} config option(s) validated")
 
-    if sources:
+    if sources and not skip_config_source:
         read_ids = set()
         mentioned = set()
         for source in sources:
@@ -293,6 +294,55 @@ def check_package(names, syms, binary, report: Report, config: dict | None,
                         "as live-recompiled mods must be")
     if syms["sections"]:
         report.ok("syms/sections", f"{len(syms['sections'])} section(s), 0x{total:x} bytes of image+bss")
+
+    # Section addresses. The loader keeps a lookup table keyed by guest address and has fixed-address
+    # paths that read a section's vram directly, so a mod that is linked outside the region every
+    # other mod uses faults at boot instead of reporting a load error. Measured against the mods that
+    # ship with the Android port: all of them link their first section at exactly 0x81000000.
+    MOD_REGION_START, MOD_REGION_END = 0x81000000, 0x82000000
+    total_funcs = 0
+    for section in syms["sections"]:
+        if not (MOD_REGION_START <= section["vram"] < MOD_REGION_END):
+            report.fail("syms/section_vram",
+                        f"section vram is 0x{section['vram']:08X}, outside the mod region "
+                        f"[0x{MOD_REGION_START:08X}, 0x{MOD_REGION_END:08X}). Link with "
+                        f"--base 0x80FFF000 --image-offset 0x1000 (mod.ld's RAMBASE); the mods the "
+                        "Android port ships are all at 0x81000000. A wrong vram faults at boot rather "
+                        "than producing a load error.")
+        total_funcs += len(section.get("funcs", []))
+    else:
+        report.ok("syms/section_vram",
+                  f"all {len(syms['sections'])} section(s) linked inside the mod region")
+
+    # Hook and replacement records index the mod's own function table. Out of range is undefined
+    # behaviour in the loader (it dereferences the index without a bounds check on some paths), so a
+    # package that survives the mod tool can still take the app down at startup.
+    out_of_range = [rec for rec in list(syms["hooks"]) + list(syms["replacements"])
+                    if rec[0] >= total_funcs]
+    if out_of_range:
+        report.fail("syms/func_index",
+                    f"{len(out_of_range)} hook/replacement record(s) point at function index "
+                    f">= {total_funcs} (the number of functions in this package); the loader indexes "
+                    "its function table with this value")
+    elif syms["hooks"] or syms["replacements"]:
+        report.ok("syms/func_index",
+                  f"{len(syms['hooks'])} hook(s) and {len(syms['replacements'])} replacement(s) all "
+                  f"reference a function that exists ({total_funcs} in the package)")
+
+    # Shape heuristic: the live recompiler compiles one function at a time and rejects a few
+    # relocation shapes with assert(false)/errored, which in a release build leaves a half-built
+    # function that is then callable. Every mod in the ecosystem ships many small functions; a
+    # single function spanning the whole image is the exotic input, so flag it.
+    for index, section in enumerate(syms["sections"]):
+        funcs = section.get("funcs", [])
+        if len(funcs) == 1 and section["rom_size"] > 0x400:
+            _offset, size = funcs[0]
+            if size > section["rom_size"] * 3 // 4:
+                report.warn("syms/function_shape",
+                            f"section {index} is one {size:#x}-byte function covering most of the "
+                            f"{section['rom_size']:#x}-byte image. Known-good mods ship many small "
+                            "functions; consider -O1 or noinline on the helpers so the live "
+                            "recompiler's per-function reloc handling sees an ordinary shape.")
 
     # Relocations: unsupported types, and pairs the loader expects to stay adjacent.
     bad_types = set()
@@ -461,6 +511,9 @@ def main():
     parser.add_argument("--patches", default=None,
                         help="directory of the port's base patches (e.g. ../android-repo/patches)")
     parser.add_argument("--strict", action="store_true", help="treat warnings as failures")
+    parser.add_argument("--skip-config-source", action="store_true",
+                        help="don't cross-check the config ids read by the sources (for builds of the same "
+                             "sources that leave the config reads out, e.g. make PROBE=1)")
     args = parser.parse_args()
 
     nrm_path = pathlib.Path(args.nrm) if args.nrm else None
@@ -514,7 +567,7 @@ def main():
         return 1 if report.render()[0] else 1
 
     print(f"auditing manifest from {manifest_src}" + (f" and package {nrm_path.name}" if nrm_path else ""))
-    check_manifest(manifest, report, config, sources)
+    check_manifest(manifest, report, config, sources, skip_config_source=args.skip_config_source)
 
     # The .nrm is what the loader reads, so it wins; a mod.toml that disagrees with it means the
     # package is stale and the shipped options are not the ones being edited.

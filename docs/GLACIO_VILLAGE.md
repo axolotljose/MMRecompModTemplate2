@@ -122,14 +122,25 @@ can actually produce), and it then compiles the mod for MIPS and fails if *any* 
 outside the base API plus the names the game exports. That is the check that would have caught the
 `home.pos` bug.
 
-**4. Link layout the loader can rebase.** `RecompModTool` reconstructs baked immediates by reading
-the mod binary at `rom_addr + reloc_offset - ram_addr`, which only stays in bounds (and correct) when
-a section's ELF address equals its offset in the image. So the link uses `--base 0 --image-offset
-0x1000`, matching the `.nrm` files the Android port ships (first section `vram == 0x1000`), and the
-runtime then rebases the whole image to its own address, applying the delta through the relocations.
-`tools/mm_mips_link.py` additionally refuses to finish if a jump points outside the image without an
-`R_MIPS_26` relocation to fix it up, if a `HI16` is followed by an `LO16` for a different symbol (the
-mod tool rejects that), or if a relocation type is outside what the runtime can apply.
+**4. Every function must be registered, or it is never compiled.** This is what actually broke the
+first Android build. RecompModTool records one entry in the symbol file's function table per `STT_FUNC`
+ELF symbol that has a size, and the runtime live recompiles *exactly those* functions — nothing else.
+The Zig path's linker was only carrying over the symbols it happened to need for relocations, so the
+package declared a single function (the hook) while the image held eleven: every internal helper was
+present in `mod_binary.bin` but had no compiled body. The first frame that reached a call into one of
+them faulted, which on Android is a force close with no mod error dialog, because the package itself
+parsed fine. A PC build that never got run would have hidden this forever. The linker now carries over
+all defined function symbols, and `check_mod.py` fails a package whose hook or replacement records an
+out-of-range function index and warns when one function covers most of the image (the shape that means
+"the compiler inlined everything and nothing else was registered").
+
+**5. Sections live in the mod region.** `mod.ld` puts the image at `RAMBASE = 0x81000000`, and every
+`.nrm` that is known to load — including the ones bundled with the Android port — has its first section
+at exactly `0x81000000`. The Zig path links with `--base 0x80FFF000 --image-offset 0x1000` to land on
+the same address, and `check_mod.py` fails any package whose sections fall outside
+`[0x81000000, 0x82000000)`. An earlier revision of this build linked at `0x1000` instead, having
+mis-read a field in the port's built-in `.nrm`; that deviation is what the auditor rule exists to
+prevent.
 
 **5. Symbols that resolve everywhere.** Game functions and data are referenced *by name* — never by a
 stored address, since the loader resolves undefined symbols against `mm.us.rev1.syms.toml` /
@@ -183,10 +194,39 @@ quest is fun or bug-free on hardware. Expect to iterate on the *gameplay* number
 trigger radius, which entrance you arrive at) rather than on loading: they are all config options for
 that reason.
 
+## Field report: the boot crash, and how to bisect it if it comes back
+
+The first Android build force-closed the port on starting the game, with no mod error dialog. Two
+things were wrong, and neither is visible from a PC-only workflow or from `RecompModTool`'s exit code:
+
+1. **Unregistered functions** (the actual crash): the mod's internal helpers were compiled into the
+   image but absent from the symbol file's function table, so they were never live recompiled. The
+   package loaded; the first frame that called a helper faulted. Fixed by emitting a `STT_FUNC` symbol
+   for every defined function in `tools/mm_mips_link.py`.
+2. **A wrong link base** introduced in the same revision (sections at `0x1000` instead of
+   `0x81000000`), found by parsing the `.nrm` files that ship with the port and comparing field for
+   field. Fixed and now enforced by the auditor.
+
+The lesson generalises: "the mod tool printed nothing" is not evidence. Diff against a package that is
+known to load on the target, field by field — `python3 tools/mm_nrm_inspect.py <mine.nrm>` next to
+`<working.nrm>` is what found both of these, and `make mod` now asserts the invariants it exposed.
+
+If a build still crashes on a device, bisect with the two artefacts this repo produces:
+
+* `build-probe/glacio_probe.nrm` — installs the same `Player_Update` hook, logs one line, runs no quest
+  code. Probe crashes too  → packaging/loader problem, not the quest. Probe loads, mod crashes → the
+  quest code; then narrow it with the config options (`enabled = No` should make the mod inert while
+  still loading, which separates "loaded and hooked" from "the quest logic did something bad").
+* `adb logcat -s Zelda64Recomp:* NativeUI:* libc:* DEBUG:*` while launching — the mod loader prints the
+  reason for every *reported* load failure, and a native `SIGSEGV` backtrace shows which function the
+  fault was in. That output distinguishes the cases far faster than reasoning about them, so it is worth
+  grabbing before re-testing.
+
 ## Reproducing the checks
 
 ```sh
 make TOOLCHAIN=zig test                 # helpers + libgcc/libcall scan
+make TOOLCHAIN=zig probe                # build-probe/glacio_probe.nrm: hook only, one log line
 make TOOLCHAIN=zig mod MOD_TOOL=$HOME/tools/RecompModTool
 python3 tools/check_mod.py mod.toml build/mm_recomp_glacio_village.nrm \
     --patches ../Zelda64Recomp-Android/patches \

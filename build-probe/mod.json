@@ -1,0 +1,12 @@
+{
+    "authors" : [
+        "Arena Agent"
+    ],
+    "description" : "On the last day, a great ice crystal crystallises in the town square of South Clock Town, where Link arrived that morning. Step close and draw your sword? no: stand beside it and press A, and the crystal swallows you whole.\n\nIt spits you out in Glacio Village, the snowbound mountain village of the sorceress Diana. A large crystal in the village is the door into Diana's castle, and a small one leads back the way you came.\n\nInside, Diana waits in the frozen throne room: the pale ghost queen of Ikana, grown taller and crueler than legend remembers her, and the moonlight through her window is the only thing she cannot survive. Land your blows, drive her into the light, and the waygate behind you freezes shut for the rest of the three days.\n\nDesign notes: this mod reuses scenes, actors and boss logic that already exist in the cartridge (Mountain Village in winter, the throne room of Ikana Castle, Igos du Ikana as Diana) and it only *hooks* game functions instead of replacing them. That keeps it save-compatible, compatible with the mobile port's own patches, and stackable with other mods. All of its state is per-session, so a new 3-day cycle starts the quest over from scratch.\n\nThe quest is only reachable on the day configured below (Day 3 = the final day by default), so nothing changes during a normal playthrough until then.\n",
+    "display_name" : "Glacio Village (load probe)",
+    "game_id" : "mm",
+    "id" : "mm_recomp_glacio_village_probe",
+    "minimum_recomp_version" : "1.2.2",
+    "short_description" : "Diagnostic build - logs one line, runs no quest code",
+    "version" : "1.0.0"
+}

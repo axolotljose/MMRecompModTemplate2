@@ -305,6 +305,34 @@ class Linker:
             self.symbols.append({"name": "", "value": 0, "size": 0,
                                  "info": (E.STB_LOCAL << 4) | STT_SECTION, "other": 0,
                                  "shndx": self.elf_section_index[id(out)]})
+        # Carry over every defined function symbol, not just the ones that happen to be referenced.
+        #
+        # This is the single most important thing this linker does. RecompModTool records one entry in
+        # the mod symbol file's function table per STT_FUNC symbol with a size, and the runtime live
+        # recompiles *exactly those* functions -- nothing else. A helper that is missing from the table
+        # is therefore never turned into code: the call site stays a jal to a mod address that has no
+        # compiled body, and the first frame that reaches it faults. That is a hard crash at game start
+        # (no mod error dialog, because the package itself parsed fine), and it is invisible on a PC
+        # build that never runs the mod. Locals must precede globals, hence this runs first.
+        self._emitted_func_addrs = set()
+        seen_funcs = self._emitted_func_addrs
+        for out in self.sections:
+            if out.kind == SHT_NOBITS:
+                continue
+            for chunk in out.chunks:
+                for sym in chunk.obj.symbols:
+                    if sym.shndx != chunk.sec_index or sym.type != STT_FUNC or sym.size == 0:
+                        continue
+                    addr = out.addr + chunk.offset + sym.value
+                    if addr in seen_funcs:
+                        continue
+                    seen_funcs.add(addr)
+                    local = sym.bind == E.STB_LOCAL
+                    self.symbols.append({"name": sym.name, "value": addr, "size": sym.size,
+                                         "info": ((E.STB_LOCAL if local else E.STB_GLOBAL) << 4) | STT_FUNC,
+                                         "other": 0, "shndx": self.elf_section_index[id(out)],
+                                         "local": local})
+
         self.first_global = len(self.symbols)
         for name, res in sorted(self.globals.items()):
             if not res["defined"]:
@@ -312,6 +340,8 @@ class Linker:
             if res["type"] not in (STT_FUNC, STT_OBJECT, STT_NOTYPE):
                 continue
             addr = res["addr"]
+            if res["type"] == STT_FUNC and addr in getattr(self, "_emitted_func_addrs", ()):
+                continue  # already carried over from the input object's symbol table
             self.symbols.append({"name": name, "value": addr, "size": res["size"],
                                  "info": (E.STB_GLOBAL << 4) | res["type"], "other": 0,
                                  "shndx": self.section_index_of_address(addr)})
@@ -631,12 +661,12 @@ def main():
     ap = argparse.ArgumentParser(description="minimal MIPS32 BE linker for Zelda64 recomp mods")
     ap.add_argument("objects", nargs="*", help="input .o files (or ELF files with --dump)")
     ap.add_argument("-o", "--output", help="output ELF path")
-    ap.add_argument("--base", default="0",
-                    help="bias added to section addresses. Keep 0 so a section's ELF address "
-                         "equals its offset in the image (ram_addr == rom_addr), which is what "
-                         "RecompModTool assumes when it reads the baked immediates back, and what "
-                         "the relocatable loader rebases from. Use 0x81000000 only for a "
-                         "fixed-address (non-relocatable, offline recompiled) build.")
+    ap.add_argument("--base", default="0x80FFF000",
+                    help="bias added to section addresses. Mod sections must land in the region the "
+                         "loader reserves for mods, which every working .nrm starts at 0x81000000; "
+                         "combined with the default --image-offset 0x1000 (space for the ELF headers) "
+                         "the first section ends up at exactly 0x81000000. Use 0 only for a "
+                         "self-describing dump, and 0x81000000 for a fixed-address offline build.")
     ap.add_argument("--image-offset", default="0x1000", help="file offset of the image start")
     ap.add_argument("--dump", action="store_true", help="dump ELF(s) instead of linking")
     ap.add_argument("--no-verify", action="store_true", help="skip decoding the linked image to check it")

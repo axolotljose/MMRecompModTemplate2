@@ -54,6 +54,10 @@ fail. That imposes four rules, and `tools/check_mod.py` proves all four hold on 
   stray float op means the mod never loads. `include/glacio_float.h` does the IEEE-754 work with
   integers instead, and `make test` checks those helpers against real float arithmetic (~850k cases)
   and re-checks the compiled object for compiler-runtime references.
+* **Every function in the image is registered.** The runtime live-recompiles exactly the functions the
+  symbol file lists, so an unlisted helper is code that exists but has no compiled body — the first call
+  into it is a force close, not a load error. The linker emits one `STT_FUNC` symbol per function and
+  the auditor checks the package's function indices stay in range.
 * **Only symbols the loader can resolve.** Imports are limited to the base API, undefined symbols
   must exist in `Zelda64RecompSyms/mm.us.rev1.syms.toml`, no absolute game address may be baked into
   data, and every relocation must be a type the runtime applies. `minimum_recomp_version` is kept at
@@ -84,6 +88,7 @@ make nrm MOD_TOOL=/path/to/RecompModTool      # build + package
 make check                                    # audit build/mm_recomp_glacio_village.nrm
 make test                                     # float helpers + libgcc check
 make DEMO=1 all                               # build the template's example mod instead (into build-demo/)
+make PROBE=1 probe                            # diagnostic build: hook only, no quest code (build-probe/)
 ```
 
 `make check`, `nrm` and `mod` cross-check against the mobile port automatically when it is checked

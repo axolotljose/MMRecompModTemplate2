@@ -1,0 +1,95 @@
+# Config file for "Glacio Village - The Ice Crystal of the Last Day", a Majora's Mask: Recompiled mod.
+#
+# Build it with `make mod` (see the README for the toolchain options), then drop
+# build/mm_recomp_glacio_village.nrm into the mods folder of any Zelda 64: Recompiled build,
+# including the Android port.
+
+# Fields that end up in the mod's manifest.
+[manifest]
+
+# Unique ID of this mod. Pick something long enough that it'll never be the same as any other mod.
+id = "mm_recomp_glacio_village_probe"
+
+# Version of this mod.
+version = "1.0.0"
+
+# The name that will show up for this mod in the mod menu.
+display_name = "Glacio Village (load probe)"
+
+# The description that will show up when this mod is displayed in the mod menu.
+description =  """
+On the last day, a great ice crystal crystallises in the town square of South Clock Town, where \
+Link arrived that morning. Step close and draw your sword? no: stand beside it and press A, and \
+the crystal swallows you whole.
+
+It spits you out in Glacio Village, the snowbound mountain village of the sorceress Diana. A large \
+crystal in the village is the door into Diana's castle, and a small one leads back the way you came.
+
+Inside, Diana waits in the frozen throne room: the pale ghost queen of Ikana, grown taller and \
+crueler than legend remembers her, and the moonlight through her window is the only thing she \
+cannot survive. Land your blows, drive her into the light, and the waygate behind you freezes shut \
+for the rest of the three days.
+
+Design notes: this mod reuses scenes, actors and boss logic that already exist in the cartridge \
+(Mountain Village in winter, the throne room of Ikana Castle, Igos du Ikana as Diana) and it only \
+*hooks* game functions instead of replacing them. That keeps it save-compatible, compatible with \
+the mobile port's own patches, and stackable with other mods. All of its state is per-session, so \
+a new 3-day cycle starts the quest over from scratch.
+
+The quest is only reachable on the day configured below (Day 3 = the final day by default), so \
+nothing changes during a normal playthrough until then.
+"""
+
+# A short description that will show up in this mod's entry in the mod list.
+short_description = "Diagnostic build - logs one line, runs no quest code"
+
+# Authors of this mod.
+authors = [ "Arena Agent" ]
+
+# ID of the target recomp game.
+game_id = "mm"
+
+# Minimum version of the target recomp (e.g. Zelda 64: Recompiled) that this mod can run on.
+# Note that the Android port currently ships runtime 1.2.2, so raising this above 1.2.2 would
+# stop the mod from loading there.
+minimum_recomp_version = "1.2.2"
+
+# Dependency mods. Each entry is the mod's ID and then an optional minimum version of the dependency mod.
+dependencies = [
+]
+
+# Optional dependency mods. This has the same format as `dependencies`, but the game will still start if dependencies in this
+# list aren't present. You can query the presence of a given dependency by using `recomp_is_dependency_met` in recomputils.h.
+# Calling a function imported from an optional dependency that isn't present will trigger an error.
+optional_dependencies = [
+]
+
+# Native libraries (e.g. DLLs) and the functions they export.
+# Deliberately empty: native libraries are per-platform and are not supported by the Android port,
+# so a mod that wants to run everywhere must be pure .nrm (live recompiled MIPS code).
+native_libraries = [
+]
+
+# ---------------------------------------------------------------------------
+# Mod settings. These appear in the in-game mod config menu (and, on mobile, in the touch UI).
+# ---------------------------------------------------------------------------
+
+# No config options: the probe only proves the hook installs and the package loads.
+[inputs]
+
+# Input elf file to generate a mod from.
+elf_path = "build/mod.elf"
+
+# Output mod filename.
+mod_filename = "glacio_probe"
+
+# Reference symbol files. RecompModTool resolves every path in this file relative to
+# the .toml itself, not to the current directory. These come from the Zelda64RecompSyms submodule and are what lets the
+# mod tool turn a reference to, say, `Actor_Spawn` into a reference to the recompiled game function
+# instead of an unresolved symbol.
+func_reference_syms_file = "Zelda64RecompSyms/mm.us.rev1.syms.toml"
+data_reference_syms_files = [ "Zelda64RecompSyms/mm.us.rev1.datasyms.toml", "Zelda64RecompSyms/mm.us.rev1.datasyms_static.toml" ]
+
+# Additional files to include in the mod. `zip -j`/`Compress-Archive` store these at the root of the
+# .nrm, which is where the mod menu looks for thumb.png.
+additional_files = [ ]

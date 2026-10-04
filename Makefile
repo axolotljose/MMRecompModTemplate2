@@ -43,7 +43,7 @@ endif
 
 # DEMO=1 builds the template's example mod in its own directory, so a demo build can never be
 # mistaken for the real one (see the DEMO block below).
-BUILD_DIR ?= $(if $(filter 1,$(DEMO)),build-demo,build)
+BUILD_DIR ?= $(if $(filter 1,$(DEMO)),build-demo,$(if $(filter 1,$(PROBE)),build-probe,build))
 
 TARGET  := $(BUILD_DIR)/mod.elf
 LINKER  := tools/mm_mips_link.py
@@ -54,12 +54,19 @@ ARCHFLAGS := $(TARGETFLAGS) -mips2 -mabi=32 -O2 -G0 -fno-pic -mno-abicalls -mno-
 WARNFLAGS := -Wall -Wextra -Wno-incompatible-library-redeclaration -Wno-unused-parameter -Wno-unknown-pragmas -Wno-unused-variable \
               -Wno-missing-braces -Wno-unsupported-floating-point-opt -Wno-macro-redefined -Werror=section
 CFLAGS   := $(ARCHFLAGS) $(WARNFLAGS) -D_LANGUAGE_C -nostdinc -ffunction-sections
-CPPFLAGS := -DMIPS -DF3DEX_GBI_2 -DF3DEX_GBI_PL -DGBI_DOWHILE -I include -I include/dummy_headers \
+CPPFLAGS := $(if $(filter 1,$(PROBE)),-DGLACIO_PROBE )-DMIPS -DF3DEX_GBI_2 -DF3DEX_GBI_PL -DGBI_DOWHILE -I include -I include/dummy_headers \
             -I mm-decomp/include -I mm-decomp/src -I mm-decomp/extracted/n64-us -idirafter include/libc -idirafter mm-decomp/include/libc
 LDFLAGS  := -nostdlib -T $(LDSCRIPT) -Map $(BUILD_DIR)/mod.map --unresolved-symbols=ignore-all --emit-relocs -e 0 --no-nmagic -gc-sections
 
 rwildcard = $(foreach d,$(wildcard $(1:=/*)),$(call rwildcard,$d,$2) $(filter $(subst *,%,$2),$d))
 getdirs = $(sort $(dir $(1)))
+
+# PROBE=1 builds the diagnostic variant (hook + one log line, no quest code) for bisecting a
+# load failure on a device. It gets its own directory and its own mod_filename.
+ifeq ($(PROBE),1)
+BUILD_DIR := build-probe
+MOD_TOML := probe.toml
+endif
 
 # DEMO=1 builds the template's example mod (examples/always_spin_attack.c) instead of Glacio Village.
 ifeq ($(DEMO),1)
@@ -74,12 +81,13 @@ ALL_OBJS := $(C_OBJS)
 ALL_DEPS := $(C_DEPS)
 BUILD_DIRS := $(call getdirs,$(ALL_OBJS))
 
-# LINK_BASE must keep a section's ELF address equal to its offset in the image (ram_addr ==
-# rom_addr). RecompModTool reads the baked immediates back out of the binary using exactly that
-# assumption, and the relocatable loader rebases the image to its own address anyway, applying the
-# delta through the relocations -- which is also what the .nrm files shipped with the Android port
-# look like (first section at 0x1000).
-LINK_BASE ?= 0
+# Mod sections live in the region the loader reserves for mods. Every .nrm in the ecosystem -- the
+# ones bundled with the Android port included -- links its first section at exactly 0x81000000, which
+# is mod.ld's RAMBASE, so this path matches it rather than inventing a convention: the loader keeps a
+# function lookup table keyed by guest address, and a mod outside that region is at best a different
+# code path. With --image-offset 0x1000 (room for the ELF headers in this linker's output) the base
+# is 0x81000000 - 0x1000.
+LINK_BASE ?= 0x80FFF000
 LINK_IMAGE_OFFSET ?= 0x1000
 
 # RecompModTool packages the linked elf into a .nrm. It ships in the N64Recomp repository (tag
@@ -127,12 +135,16 @@ nrm: $(TARGET)
 mod: $(TARGET)
 	$(call check-tool,$(MOD_TOOL))
 	$(MOD_TOOL) $(MOD_TOML) $(BUILD_DIR)
-	python3 tools/check_mod.py $(MOD_TOML) $(NRM) --src $(SRC_DIR) $(AUDIT_ARGS) --strict
+	python3 tools/check_mod.py $(MOD_TOML) $(NRM) --src $(SRC_DIR) $(AUDIT_ARGS) $(CHECK_EXTRA) --strict
 
 # Host-side checks that do not need a packaged mod: float helper accuracy and the rule that the
 # object must not reference any symbol the base game cannot resolve.
 test:
 	python3 tools/test_float_helpers.py
+
+# Build the diagnostic variant: build-probe/glacio_probe.nrm.
+probe:
+	$(MAKE) PROBE=1 TOOLCHAIN=$(TOOLCHAIN) ZIG=$(ZIG) MOD_TOOL=$(MOD_TOOL) CHECK_EXTRA=--skip-config-source mod
 
 check:
 	python3 tools/check_mod.py $(MOD_TOML) $(NRM) --src $(SRC_DIR) $(AUDIT_ARGS)
@@ -156,7 +168,7 @@ endif
 
 -include $(ALL_DEPS)
 
-.PHONY: clean all nrm mod check test
+.PHONY: clean all nrm mod check test probe
 
 # Print target for debugging
 print-% : ; $(info $* is a $(flavor $*) variable set to [$($*)]) @true

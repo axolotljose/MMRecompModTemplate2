@@ -57,6 +57,20 @@
 #define GLACIO_SLOT_FLEE 3   /* Diana's castle -> Glacio Village  */
 #define GLACIO_SLOT_COUNT 4
 
+/*
+ * Each helper is kept out of its caller on purpose. With -O2 and all-static functions the compiler
+ * folds the whole mod into a single huge function, which is a shape no other mod in the ecosystem
+ * ships (the mods bundled with the Android port have between 11 and 354 functions each, none over a
+ * few hundred bytes). Small functions keep the live recompiler's per-function relocation walk simple,
+ * and a mod that trips one of its unsupported-shape paths takes the app down at boot instead of
+ * reporting a load error, so this is a stability choice rather than a size one.
+ */
+#if defined(__clang__) || defined(__GNUC__)
+# define GLACIO_NOINLINE __attribute__((noinline))
+#else
+# define GLACIO_NOINLINE
+#endif
+
 typedef struct {
     /* Cached config. Refreshed once per scene entry, because the per-frame path must not make
      * import calls (config access goes through the host on every call). */
@@ -101,7 +115,7 @@ static GlacioState sGlacio;
  * the mod tool cannot resolve a symbol that the base game does not export, which would make the
  * mod fail to load on every platform.
  */
-static s32 Glacio_ConfigInt(const char* key, s32 min, s32 max, s32 fallback) {
+GLACIO_NOINLINE static s32 Glacio_ConfigInt(const char* key, s32 min, s32 max, s32 fallback) {
     s32 value = (s32)recomp_get_config_u32(key);
 
     if (value < min || value > max) {
@@ -110,7 +124,7 @@ static s32 Glacio_ConfigInt(const char* key, s32 min, s32 max, s32 fallback) {
     return value;
 }
 
-static void Glacio_ReadConfig(void) {
+GLACIO_NOINLINE static void Glacio_ReadConfig(void) {
     s32 day;
 
     /* Enum options report the index of the selected entry; "Yes"/"On" are the first entries. */
@@ -164,7 +178,7 @@ static void Glacio_ReadConfig(void) {
 /* --------------------------------------------------------------- utilities -- */
 
 /** True when nothing else is grabbing the screen, so starting a warp is safe. */
-static s32 Glacio_CanWarp(PlayState* play) {
+GLACIO_NOINLINE static s32 Glacio_CanWarp(PlayState* play) {
     if (gSaveContext.gameMode != GAMEMODE_NORMAL) {
         return false;
     }
@@ -183,7 +197,7 @@ static s32 Glacio_CanWarp(PlayState* play) {
 
 /** Start a white fade into `entrance`, following the game's own warp idiom (see e.g. the tourist
  *  information's gate actor): the entrance index is consumed while the transition runs. */
-static void Glacio_Warp(PlayState* play, u16 entrance) {
+GLACIO_NOINLINE static void Glacio_Warp(PlayState* play, u16 entrance) {
     play->nextEntrance = entrance;
     play->transitionTrigger = TRANS_TRIGGER_START;
     play->transitionType = TRANS_TYPE_FADE_WHITE;
@@ -195,7 +209,7 @@ static void Glacio_Warp(PlayState* play, u16 entrance) {
 
 /** Find the mod's crystal for `slot` in the current room, or NULL. The actor lists are rescanned
  *  every time on purpose: actors are freed on room and scene changes, so caching them is unsafe. */
-static Actor* Glacio_FindCrystal(PlayState* play, s32 slot) {
+GLACIO_NOINLINE static Actor* Glacio_FindCrystal(PlayState* play, s32 slot) {
     Actor* actor = play->actorCtx.actorLists[ACTORCAT_ITEMACTION].first;
     u16 marker = GLACIO_MARKER + slot;
 
@@ -210,7 +224,7 @@ static Actor* Glacio_FindCrystal(PlayState* play, s32 slot) {
 
 /** Place one waygate crystal next to the spot Link entered this room at, so it always stands on
  *  ground he can reach and never inside a wall. Returns NULL if the game refused to spawn it. */
-static Actor* Glacio_SpawnCrystal(PlayState* play, s32 slot, s16 dx, s16 dz, s32 scale) {
+GLACIO_NOINLINE static Actor* Glacio_SpawnCrystal(PlayState* play, s32 slot, s16 dx, s16 dz, s32 scale) {
     Actor* playerActor;
     Actor* crystal;
     s32 baseX;
@@ -241,7 +255,7 @@ static Actor* Glacio_SpawnCrystal(PlayState* play, s32 slot, s16 dx, s16 dz, s32
 }
 
 /** True when Link is close enough to `crystal` and pressed A on this frame. */
-static s32 Glacio_CrystalActivated(PlayState* play, Actor* crystal) {
+GLACIO_NOINLINE static s32 Glacio_CrystalActivated(PlayState* play, Actor* crystal) {
     Vec3f playerPos;
     Vec3f crystalPos;
     s32 radius = sGlacio.triggerRadius;
@@ -266,7 +280,7 @@ static s32 Glacio_CrystalActivated(PlayState* play, Actor* crystal) {
 
 /** Diana herself, if this room contains her. She is placed by the scene, never spawned here, so
  *  the whole fight (music, curtains, moonlight, his death) stays vanilla. */
-static Actor* Glacio_FindDiana(PlayState* play) {
+GLACIO_NOINLINE static Actor* Glacio_FindDiana(PlayState* play) {
     Actor* actor = play->actorCtx.actorLists[ACTORCAT_BOSS].first;
 
     while (actor != NULL) {
@@ -280,7 +294,7 @@ static Actor* Glacio_FindDiana(PlayState* play) {
 
 /* ------------------------------------------------------------ scene set-up -- */
 
-static void Glacio_PlaceWaygates(PlayState* play, s32 sceneId) {
+GLACIO_NOINLINE static void Glacio_PlaceWaygates(PlayState* play, s32 sceneId) {
     sGlacio.placedMask = 0;
     sGlacio.dianaPresent = false;
     sGlacio.dianaBuffed = false;
@@ -336,7 +350,25 @@ static void Glacio_PlaceWaygates(PlayState* play, s32 sceneId) {
 
 /* -------------------------------------------------------------- the boss -- */
 
-static void Glacio_UpdateDiana(PlayState* play) {
+#ifdef GLACIO_PROBE
+/* Built with `make PROBE=1`. It installs the same hook and returns immediately after one log line,
+ * so if this loads and the full mod does not, the problem is in the quest code, not the package. */
+RECOMP_HOOK("Player_Update")
+void Glacio_ProbeUpdate(Actor* playerActor, PlayState* play) {
+    static s32 sLogged;
+    if (sLogged) {
+        return;
+    }
+    sLogged = 1;
+    if (playerActor != NULL && play != NULL) {
+        recomp_printf("glacio probe: hook ran, scene 0x%02X day %d\n", (u32)play->sceneId,
+                      (s32)(gSaveContext.save.day % 5));
+    } else {
+        recomp_printf("glacio probe: hook ran with null arguments\n");
+    }
+}
+#else
+GLACIO_NOINLINE static void Glacio_UpdateDiana(PlayState* play) {
     Actor* diana = Glacio_FindDiana(play);
 
     if (diana == NULL) {
@@ -398,6 +430,7 @@ static void Glacio_UpdateDiana(PlayState* play) {
  * deliberately hooks it instead of replacing it, which keeps it compatible with the base
  * recompilation's own patch of the same function and with any other mod hooking it too.
  */
+
 RECOMP_HOOK("Player_Update")
 void Glacio_OnPlayerUpdate(Actor* playerActor, PlayState* play) {
     s32 sceneId;
@@ -475,3 +508,5 @@ void Glacio_OnPlayerUpdate(Actor* playerActor, PlayState* play) {
         }
     }
 }
+
+#endif /* GLACIO_PROBE */
