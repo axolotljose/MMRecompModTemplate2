@@ -11,3 +11,6 @@
 patches.map
 build/
 .vscode/settings.json
+build-demo/
+__pycache__/
+*.pyc

@@ -1,56 +1,215 @@
-# Config file for an example Majora's Mask: Recompiled mod.
+# Config file for "Glacio Village - The Ice Crystal of the Last Day", a Majora's Mask: Recompiled mod.
+#
+# Build it with `make mod` (see the README for the toolchain options), then drop
+# build/mm_recomp_glacio_village.nrm into the mods folder of any Zelda 64: Recompiled build,
+# including the Android port.
 
 # Fields that end up in the mod's manifest.
 [manifest]
 
 # Unique ID of this mod. Pick something long enough that it'll never be the same as any other mod.
-# The name displayed in the mod management menu is separate from this so this doesn't need to be human readable.
-id = "mm_recomp_mod_template"
+id = "mm_recomp_glacio_village"
 
 # Version of this mod.
 version = "1.0.0"
 
-# The name that will show up for this mod in the mod menu. This should be human readable.
-display_name = "Always Spin Attack"
+# The name that will show up for this mod in the mod menu.
+display_name = "Glacio Village - The Ice Crystal of the Last Day"
 
-# The description that will show up when this mod is displayed in the mod menu. This should be human readable.
+# The description that will show up when this mod is displayed in the mod menu.
 description =  """
-This is an example mod for Majora's Mask: Recompiled that can be used as a template for creating mods. \
-When this mod is enabled, you will always perform a quickspin when swinging your sword.
+On the last day, a great ice crystal crystallises in the town square of South Clock Town, where \
+Link arrived that morning. Step close and draw your sword? no: stand beside it and press A, and \
+the crystal swallows you whole.
 
-For more details, see https://github.com/Zelda64Recomp/MMRecompModTemplate."""
+It spits you out in Glacio Village, the snowbound mountain village of the sorceress Diana. A large \
+crystal in the village is the door into Diana's castle, and a small one leads back the way you came.
 
-# A short description that will show up in this mod's entry in the mod list. This should be human readable and kept short
-# to prevent it from being cut off due to the limited space.
-short_description = "Always perform a quickspin when swinging your sword."
+Inside, Diana waits in the frozen throne room: the pale ghost queen of Ikana, grown taller and \
+crueler than legend remembers her, and the moonlight through her window is the only thing she \
+cannot survive. Land your blows, drive her into the light, and the waygate behind you freezes shut \
+for the rest of the three days.
+
+Design notes: this mod reuses scenes, actors and boss logic that already exist in the cartridge \
+(Mountain Village in winter, the throne room of Ikana Castle, Igos du Ikana as Diana) and it only \
+*hooks* game functions instead of replacing them. That keeps it save-compatible, compatible with \
+the mobile port's own patches, and stackable with other mods. All of its state is per-session, so \
+a new 3-day cycle starts the quest over from scratch.
+
+The quest is only reachable on the day configured below (Day 3 = the final day by default), so \
+nothing changes during a normal playthrough until then.
+"""
+
+# A short description that will show up in this mod's entry in the mod list.
+short_description = "An ice crystal on the last day opens the way to Glacio Village and Diana's castle."
 
 # Authors of this mod.
-authors = [ "Your name here" ]
+authors = [ "Arena Agent" ]
 
 # ID of the target recomp game.
 game_id = "mm"
 
 # Minimum version of the target recomp (e.g. Zelda 64: Recompiled) that this mod can run on.
+# Note that the Android port currently ships runtime 1.2.2, so raising this above 1.2.2 would
+# stop the mod from loading there.
 minimum_recomp_version = "1.2.2"
 
 # Dependency mods. Each entry is the mod's ID and then an optional minimum version of the dependency mod.
 dependencies = [
-# Example dependency:
-#    "modname:1.0.0"
 ]
 
 # Optional dependency mods. This has the same format as `dependencies`, but the game will still start if dependencies in this
 # list aren't present. You can query the presence of a given dependency by using `recomp_is_dependency_met` in recomputils.h.
 # Calling a function imported from an optional dependency that isn't present will trigger an error.
 optional_dependencies = [
-
 ]
 
 # Native libraries (e.g. DLLs) and the functions they export.
+# Deliberately empty: native libraries are per-platform and are not supported by the Android port,
+# so a mod that wants to run everywhere must be pure .nrm (live recompiled MIPS code).
 native_libraries = [
-# Example native library:
-#    { name = "my_native_library", funcs = ["my_native_library_function"] }
 ]
+
+# ---------------------------------------------------------------------------
+# Mod settings. These appear in the in-game mod config menu (and, on mobile, in the touch UI).
+# ---------------------------------------------------------------------------
+
+[[manifest.config_options]]
+id = "enabled"
+name = "Enable the quest"
+description = "Whether the ice crystal appears at all. Disabling this leaves the game untouched."
+type = "Enum"
+options = [ "Yes", "No" ]
+default = "Yes"
+
+[[manifest.config_options]]
+id = "crystal_day"
+name = "Crystal appears on day"
+description = "The day the ice crystal forms on. 3 is the final day (the Day of Time is 4)."
+type = "Number"
+min = 1
+max = 4
+step = 1
+precision = 0
+default = 3
+
+[[manifest.config_options]]
+id = "trigger_radius"
+name = "Crystal interaction range"
+description = "How close Link has to stand to a crystal for the A button to open the waygate."
+type = "Number"
+min = 20
+max = 2000
+step = 10
+precision = 0
+default = 160
+
+[[manifest.config_options]]
+id = "crystal_offset_x"
+name = "Crystal offset X"
+description = "East/west offset of a crystal from the spot Link entered the area at."
+type = "Number"
+min = -600
+max = 600
+step = 10
+precision = 0
+default = 150
+
+[[manifest.config_options]]
+id = "crystal_offset_z"
+name = "Crystal offset Z"
+description = "North/south offset of a crystal from the spot Link entered the area at."
+type = "Number"
+min = -600
+max = 600
+step = 10
+precision = 0
+default = 150
+
+[[manifest.config_options]]
+id = "crystal_scale_portal"
+name = "Waygate crystal size (%)"
+description = "Size of the crystals that lead onward. The big/small difference is how you tell the doors apart."
+type = "Number"
+min = 10
+max = 255
+step = 5
+precision = 0
+default = 150
+
+[[manifest.config_options]]
+id = "crystal_scale_return"
+name = "Return crystal size (%)"
+description = "Size of the crystals that lead back the way you came."
+type = "Number"
+min = 10
+max = 255
+step = 5
+precision = 0
+default = 70
+
+[[manifest.config_options]]
+id = "diana_bonus_health"
+name = "Diana bonus health"
+description = "Extra health Diana gets on top of the boss health she spawns with. 0 leaves her vanilla."
+type = "Number"
+min = 0
+max = 200
+step = 1
+precision = 0
+default = 20
+
+[[manifest.config_options]]
+id = "diana_scale_percent"
+name = "Diana size (%)"
+description = "Diana's height relative to normal. Anything above 150 starts clipping the throne room."
+type = "Number"
+min = 10
+max = 400
+step = 5
+precision = 0
+default = 130
+
+[[manifest.config_options]]
+id = "victory_rupees"
+name = "Victory reward (rupees)"
+description = "Rupees Diana leaves behind when she is put to rest. Set to 0 for no reward."
+type = "Number"
+min = 0
+max = 999
+step = 10
+precision = 0
+default = 300
+
+[[manifest.config_options]]
+id = "frost_sfx"
+name = "Frost sound cues"
+description = "Play the freeze and sorcery sound effects when a waygate opens and when Diana notices you."
+type = "Enum"
+options = [ "On", "Off" ]
+default = "On"
+
+[[manifest.config_options]]
+id = "glacio_entrance_override"
+name = "[Advanced] Glacio entrance index"
+description = "Raw entrance index to warp to from the town crystal. 0 keeps the built-in Glacio Village destination."
+type = "Number"
+min = 0
+max = 65535
+step = 1
+precision = 0
+default = 0
+
+[[manifest.config_options]]
+id = "lair_entrance_override"
+name = "[Advanced] Diana's castle entrance index"
+description = "Raw entrance index to warp to from the village crystal. 0 keeps the built-in throne room."
+type = "Number"
+min = 0
+max = 65535
+step = 1
+precision = 0
+default = 0
 
 # Inputs to the mod tool.
 [inputs]
@@ -59,38 +218,15 @@ native_libraries = [
 elf_path = "build/mod.elf"
 
 # Output mod filename.
-mod_filename = "mm_recomp_mod_template"
+mod_filename = "mm_recomp_glacio_village"
 
-# Reference symbol files.
+# Reference symbol files. RecompModTool resolves every path in this file relative to
+# the .toml itself, not to the current directory. These come from the Zelda64RecompSyms submodule and are what lets the
+# mod tool turn a reference to, say, `Actor_Spawn` into a reference to the recompiled game function
+# instead of an unresolved symbol.
 func_reference_syms_file = "Zelda64RecompSyms/mm.us.rev1.syms.toml"
 data_reference_syms_files = [ "Zelda64RecompSyms/mm.us.rev1.datasyms.toml", "Zelda64RecompSyms/mm.us.rev1.datasyms_static.toml" ]
 
-# Additional files to include in the mod.
-additional_files = [ ]
-
-[[manifest.config_options]]
-id = "enum_option"
-name = "Enum Option"
-description = "Test enum config option"
-type = "Enum"
-options = [ "First", "Second" ]
-default = "First"
-
-[[manifest.config_options]]
-id = "number_option"
-name = "Number Option"
-description = "Test number config option."
-type = "Number"
-min = 0
-max = 10
-step = 0.1
-precision = 1
-percent = false
-default = 1
-
-[[manifest.config_options]]
-id = "string_option"
-name = "String Option"
-description = "Test string config option."
-type = "String"
-default = "Lorem Ipsum"
+# Additional files to include in the mod. `zip -j`/`Compress-Archive` store these at the root of the
+# .nrm, which is where the mod menu looks for thumb.png.
+additional_files = [ "assets/thumb.png" ]

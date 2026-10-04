@@ -1,42 +1,142 @@
-# Majora's Mask: Recompiled Mod Template
+# Glacio Village — a Majora's Mask: Recompiled mod
 
-This is an example mod for Majora's Mask: Recompiled that can be used as a template for creating mods. It has a basic build system, headers, sample code, and a mod config toml.
+An ice crystal appears in South Clock Town on the **final day** (Day 3). Touching it with **A**
+freezes the world over and carries Link to **Glacio Village** — the Mountain Village buried in snow,
+now the domain of the sorceress **Diana**. A second crystal opens the way into her castle, and
+stepping into its throne room starts a boss fight against her.
 
-Example code for using the recompui API to build ingame UI can be found in the `ui-example` branch.
+This repository started life as `MMRecompModTemplate2`, and it is still that template underneath —
+but everything in `src/`, `mod.toml`, `Makefile` and `tools/` here is the mod itself.
 
-### Writing mods
-See [this document](https://hackmd.io/fMDiGEJ9TBSjomuZZOgzNg) for an explanation of the modding framework, including how to write function patches and perform interop between different mods.
+## What you get
+
+| Piece | Where |
+| --- | --- |
+| Mod code (one hook, no patches) | `src/glacio_village.c` |
+| Integer-only float helpers | `include/glacio_float.h` |
+| Manifest + 13 config options | `mod.toml` |
+| Build (clang, zig or a custom toolchain), package, audit | `Makefile` |
+| MIPS linker for the zig path | `tools/mm_mips_link.py` + `tools/mm_elf32.py` |
+| Compatibility auditor for shipping mods | `tools/check_mod.py` |
+| Host test for the float helpers | `tests/glacio_float_test.c`, `tools/test_float_helpers.py` |
+| Mod menu thumbnail | `tools/make_thumb.py` → `assets/thumb.png` |
+| The template's example, kept for reference | `examples/` |
+
+## The quest
+
+1. **Day 3, in South Clock Town.** A crystal forms a short distance from where Link entered the
+   area. It is the same actor the game uses for breakable ice (`Obj_Ice_Poly`), spawned with a
+   switch flag that no room ever sets, so it can never be destroyed and never collides with a
+   vanilla flag.
+2. **A on the crystal** → fade to white, arrive in the Mountain Village (winter) — Glacio Village.
+   Snow, freezing air and all. A smaller crystal waits behind you as the way back.
+3. **In the village**, a second crystal leads to the castle: Ikana Castle's throne room, reused as
+   Diana's hall. A third crystal in the village returns you to Clock Town.
+4. **Entering the castle** spawns Diana — Igos du Ikana, larger and tougher than the original, with
+   the same AI and the same weakness to light. Defeat her and you are paid in rupees and the castle
+   door closes behind you, so the fight cannot be re-run in the same cycle.
+
+Everything is deliberately reversible and stateless: no save data is touched, the crystals are
+spawned per session, and disabling the quest in the config leaves the game completely untouched.
+
+## Compatibility with the Android port
+
+The point of this build is that it also runs on
+[Zelda64Recomp-Android](https://github.com/linkzenic/Zelda64Recomp-Android), where a lot of PC mods
+fail. That imposes four rules, and `tools/check_mod.py` proves all four hold on the packaged `.nrm`:
+
+* **Pure `.nrm`, no `native_libraries`.** The Android loader cannot load a desktop `.so`/`.dll`, so
+  the mod ships as MIPS code the runtime live-recompiles.
+* **No `RECOMP_PATCH`.** The port patches 188 base functions itself; a mod that replaces one of
+  those functions fails to load. This mod hooks `Player_Update` and nothing else, so it stacks with
+  the port's patches and with other mods.
+* **No float arithmetic.** The base game does not export libgcc's `__addsf3`/`__fixsfsi`/..., so one
+  stray float op means the mod never loads. `include/glacio_float.h` does the IEEE-754 work with
+  integers instead, and `make test` checks those helpers against real float arithmetic (~850k cases)
+  and re-checks the compiled object for compiler-runtime references.
+* **Only symbols the loader can resolve.** Imports are limited to the base API, undefined symbols
+  must exist in `Zelda64RecompSyms/mm.us.rev1.syms.toml`, no absolute game address may be baked into
+  data, and every relocation must be a type the runtime applies. `minimum_recomp_version` is kept at
+  or below the port's runtime version, or the mod is refused silently.
+
+`make mod` builds, packages and audits; the last line of the audit is the shipping report. The
+symbol-file checks are cross-referenced against the port's own `patches/*.c` when you point
+`--patches` at it, which is what turns "it loads on my PC" into something you can actually verify.
+
+## Building
+
+You need a MIPS-capable C compiler and `make`. Two supported toolchains:
+
+```sh
+# clang + ld.lld (what the template expects)
+make
+
+# zig cc + the Python linker in tools/, no LLVM or binutils install required
+make TOOLCHAIN=zig ZIG=zig
+```
+
+Then package and audit. `RecompModTool` comes from the [N64Recomp](https://github.com/N64Recomp/N64Recomp)
+releases, or build it yourself from the `mod-tool-release` tag:
+
+```sh
+make mod MOD_TOOL=/path/to/RecompModTool      # build + package + audit
+make nrm MOD_TOOL=/path/to/RecompModTool      # build + package
+make check                                    # audit build/mm_recomp_glacio_village.nrm
+make test                                     # float helpers + libgcc check
+make DEMO=1 all                               # build the template's example mod instead (into build-demo/)
+```
+
+`make check`, `nrm` and `mod` cross-check against the mobile port automatically when it is checked
+out next to this repo (`../Zelda64Recomp-Android/patches` or `../android-repo/patches`); override with
+`PORT_PATCHES=/path/to/patches`, and leave it unset to skip just that one check. `DEMO=1` builds into
+`build-demo/` so a demo artifact can never be packaged as the real mod — and the auditor now catches
+that anyway (`package/elf_match` compares the packaged image against the elf the manifest names).
+
+The artifact is `build/mm_recomp_glacio_village.nrm`.
+
+## Installing
+
+* **PC (Zelda64Recomp / N64Recomp):** drop the `.nrm` into the `mods` folder next to the executable,
+  then enable *Glacio Village* in the Mods menu and restart the game if it was running.
+* **Android (Zelda64Recomp-Android):** copy the `.nrm` into the mods directory the app reports
+  (usually `<internal storage>/Zelda64/mods`), open the in-game Mods menu, enable it, and relaunch
+  the game. Configure the quest from the same menu — the day the crystal forms on, how close you
+  have to stand, Diana's health bonus and size, and the two override slots for entrances.
+
+`docs/GLACIO_VILLAGE.md` covers the design decisions, the actor and scene choices, and what the
+auditor checks.
+
+---
+
+## Template notes
+
+The sections below are the upstream template's, kept because they still apply.
+
+Example code for using the recompui API to build in-game UI can be found in the `ui-example` branch.
+See [this document](https://hackmd.io/fMDiGEJ9TBSjomuZZOgzNg) for an explanation of the modding
+framework, including how to write function patches and perform interop between different mods.
 
 ### Tools
-You'll need to install `clang` and `make` to build this template.
-* On Windows, using [chocolatey](https://chocolatey.org/) to install both is recommended. The packages are `llvm` and `make` respectively.
-  * The LLVM 19.1.0 [llvm-project](https://github.com/llvm/llvm-project) release binary, which is also what chocolatey provides, does not support MIPS correctly. The solution is to install 18.1.8 instead, which can be done in chocolatey by specifying `--version 18.1.8` or by downloading the 18.1.8 release directly.
-* On Linux, these can both be installed using your distro's package manager. You may also need to install your distro's package for the `lld` linker. On Debian/Ubuntu based distros this will be the `lld` package.
-* On MacOS, these can both be installed using Homebrew. Apple clang won't work, as you need a mips target for building the mod code.
 
-On Linux and MacOS, you'll need to also ensure that you have the `zip` utility installed.
+You'll need `clang` and `make` to build this template (or `zig`, as above).
 
-You'll also need to grab a build of the `RecompModTool` utility from the releases of [N64Recomp](https://github.com/N64Recomp/N64Recomp). You can also build it yourself from that repo if desired.
+* On Windows, using [chocolatey](https://chocolatey.org/) to install both is recommended. The
+  packages are `llvm` and `make` respectively. The LLVM 19.1.0 release binary, which is also what
+  chocolatey provides, does not support MIPS correctly; install 18.1.8 instead.
+* On Linux, use your distro's packages for `clang` and `lld`.
+* On MacOS, use Homebrew. Apple clang won't work, as you need a MIPS target.
+* On Linux and MacOS you'll also need `zip` (the mod tool shells out to it).
 
-### Building
-* First, run `make` (with an optional job count) to build the mod code itself.
-* Next, run the `RecompModTool` utility with `mod.toml` as the first argument and the build dir (`build` in the case of this template) as the second argument.
-  * This will produce your mod's `.nrm` file in the build folder.
-  * If you're on MacOS, you may need to specify the path to the `clang` and `ld.lld` binaries using the `CC` and `LD` environment variables, respectively.
+### Updating the Majora's Mask decompilation submodule
 
-### Updating the Majora's Mask Decompilation Submodule
-Mods can also be made with newer versions of the Majora's Mask decompilation instead of the commit targeted by this repo's submodule.
-To update the commit of the decompilation that you're targeting, follow these steps:
-* Build the [N64Recomp](https://github.com/N64Recomp/N64Recomp) repo and copy the N64Recomp executable to the root of this repository.
-  * Make sure you pass `KEEP_MDEBUG=1` to `make` when building the decomp in order to keep debug information. This must be done from a clean build if you have built the decomp already without `KEEP_MDEBUG=1`.
-* Build the version of the Majora's Mask decompilation that you want to update to and copy the resulting .elf file to the root of this repository.
-* Update the `mm-decomp` submodule in your clone of this repo to point to the commit you built in the previous step.
-* Run `N64Recomp generate_symbols.toml --dump-context`
-* Rename `dump.toml` and `data_dump.toml` to `mm.us.rev1.syms.toml` and `mm.us.rev1.datasyms.toml` respectively.
-  * Place both files in the `Zelda64RecompSyms` folder.
-* Try building.
-  * If it succeeds, you're done.
-  * If it fails due to a missing header, create an empty header file in the `include/dummy_headers` folder, with the same path.
-    * For example, if it complains that `assets/objects/object_cow/object_cow.h` is missing, create an empty `include/dummy_headers/objects/object_cow.h` file.
-  * If RecompModTool fails due to a function "being marked as a patch but not existing in the original ROM", it's likely that function you're patching was renamed in the Majora's Mask decompilation.
-    * Find the relevant function in the map file for the old decomp commit, then go to that address in the new map file, and update the reference to this function in your code with the new name.
+Mods can also be made with newer versions of the decompilation than the commit this repo pins.
+
+* Build [N64Recomp](https://github.com/N64Recomp/N64Recomp) and copy the executable to the repo root.
+* Build the decomp you want to target with `KEEP_MDEBUG=1` (from a clean build) and copy its `.elf`
+  to the repo root.
+* Point the `mm-decomp` submodule at that commit.
+* Run `N64Recomp generate_symbols.toml --dump-context`.
+* Rename `dump.toml` and `data_dump.toml` to `mm.us.rev1.syms.toml` and `mm.us.rev1.datasyms.toml`
+  and place both in `Zelda64RecompSyms`.
+* Try building. If a header is missing, add an empty file under `include/dummy_headers` matching the
+  path the compiler complains about.
